@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cherry Neural Link</title>
+    <style>
+        :root {
+            --primary: #00ffff;
+            --bg: #050505;
+            --surface: #111;
+        }
+        body {
+            background-color: var(--bg);
+            color: var(--primary);
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+        #console {
+            width: 90%;
+            height: 40%;
+            background: var(--surface);
+            border: 1px solid var(--primary);
+            padding: 10px;
+            overflow-y: auto;
+            margin-bottom: 20px;
+            font-size: 14px;
+            box-shadow: 0 0 10px var(--primary);
+        }
+        .msg { margin: 5px 0; border-bottom: 1px solid #222; padding-bottom: 2px;}
+        .user { color: #fff; }
+        .cherry { color: var(--primary); font-weight: bold; }
+        
+        #mic-btn {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            background: transparent;
+            border: 2px solid var(--primary);
+            color: var(--primary);
+            font-size: 40px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 0 15px var(--primary);
+        }
+        #mic-btn.recording {
+            background: var(--primary);
+            color: var(--bg);
+            box-shadow: 0 0 30px var(--primary);
+            transform: scale(1.1);
+        }
+        #status {
+            margin-top: 20px;
+            font-size: 12px;
+            opacity: 0.7;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="console">
+        <div class="msg cherry">Cherry System Online. Waiting for input...</div>
+    </div>
+
+    <div id="mic-btn">🎙️</div>
+    <div id="status">Ready</div>
+
+    <script>
+        const btn = document.getElementById('mic-btn');
+        const status = document.getElementById('status');
+        const consoleDiv = document.getElementById('console');
+        
+        let mediaRecorder;
+        let audioChunks = [];
+        let isRecording = false;
+
+        function log(text, type='cherry') {
+            const div = document.createElement('div');
+            div.className = `msg ${type}`;
+            div.innerText = (type === 'user' ? '> ' : '') + text;
+            consoleDiv.appendChild(div);
+            consoleDiv.scrollTop = consoleDiv.scrollHeight;
+        }
+
+        btn.addEventListener('mousedown', startRecording);
+        btn.addEventListener('mouseup', stopRecording);
+        btn.addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(); });
+        btn.addEventListener('touchend', (e) => { e.preventDefault(); stopRecording(); });
+
+        async function startRecording() {
+            if (isRecording) return;
+            
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+                
+                mediaRecorder.ondataavailable = event => {
+                    audioChunks.push(event.data);
+                };
+                
+                mediaRecorder.onstop = sendAudio;
+                
+                mediaRecorder.start();
+                isRecording = true;
+                btn.classList.add('recording');
+                status.innerText = "Listening...";
+                
+            } catch (err) {
+                console.error(err);
+                log("Error accessing microphone: " + err.message);
+            }
+        }
+
+        function stopRecording() {
+            if (!isRecording) return;
+            mediaRecorder.stop();
+            isRecording = false;
+            btn.classList.remove('recording');
+            status.innerText = "Processing...";
+        }
+
+        async function sendAudio() {
+            const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+            const formData = new FormData();
+            formData.append('audio', audioBlob, 'command.wav');
+
+            try {
+                log("Sending audio...", "user");
+                const res = await fetch('/api/voice', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await res.json();
+                
+                if (data.error) {
+                    log("Error: " + data.error);
+                } else {
+                    log(data.transcription, 'user');
+                    log(data.response, 'cherry');
+                }
+            } catch (err) {
+                log("Connection Failed", "cherry");
+            }
+            status.innerText = "Ready";
+        }
+    </script>
+</body>
+</html>

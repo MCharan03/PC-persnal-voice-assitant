@@ -1,20 +1,27 @@
 import sys
 import os
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 
 # Add the src directory to sys.path to allow importing modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from modules.llm import LLM
 from modules.actions import Actions
+from modules.stt import STT
+import tempfile
 
 app = Flask(__name__)
 print("--- Initializing Server Core ---")
 
 # Initialize Core Modules
-# Note: In a production 'decentralized' setup, these might be singletons or specialized workers
 brain = LLM()
 hands = Actions()
+ears = STT()
+
+@app.route('/')
+def home():
+    """Serves the Web Dashboard."""
+    return render_template('index.html')
 
 @app.route('/api/status', methods=['GET'])
 def get_status():
@@ -24,6 +31,50 @@ def get_status():
         "status": "online",
         "system_stats": stats
     })
+
+@app.route('/api/voice', methods=['POST'])
+def voice_command():
+    """
+    Accepts an audio file (blob/wav), transcribes it (STT),
+    and sends the text to the Brain (LLM).
+    """
+    if 'audio' not in request.files:
+        return jsonify({"error": "No audio file provided"}), 400
+        
+    audio_file = request.files['audio']
+    if audio_file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+
+    # Save to temp file for processing
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        audio_file.save(tmp.name)
+        tmp_path = tmp.name
+
+    try:
+        print(f"[API] Processing audio: {tmp_path}")
+        # Transcribe (Server-side STT)
+        user_text = ears.transcribe(tmp_path)
+        print(f"[API] Transcribed: {user_text}")
+        
+        if not user_text:
+            return jsonify({"error": "Could not understand audio"}), 400
+            
+        # Ask Brain
+        response_text = brain.chat(user_text)
+        
+        # Execute Actions
+        clean_response = handle_server_actions(response_text)
+        
+        return jsonify({
+            "transcription": user_text,
+            "response": clean_response,
+            "original_response": response_text
+        })
+        
+    finally:
+        # Cleanup temp file
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 @app.route('/api/chat', methods=['POST'])
 def chat():
