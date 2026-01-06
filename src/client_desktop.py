@@ -16,7 +16,7 @@ from modules.vad import VAD
 from modules.tts import TTS
 from gui import Overlay
 
-SERVER_URL = "http://localhost:5000"
+SERVER_URL = "https://localhost:5000"
 
 class CherryClient(QThread):
     sig_listening = pyqtSignal()
@@ -28,6 +28,9 @@ class CherryClient(QThread):
         super().__init__()
         self.running = True
         self.audio_queue = queue.Queue()
+        # Suppress insecure request warnings for self-signed cert
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         
     def run(self):
         print("--- Initializing Cherry Client ---")
@@ -45,10 +48,10 @@ class CherryClient(QThread):
         
         print(f"Connecting to Brain at {SERVER_URL}...")
         try:
-            requests.get(f"{SERVER_URL}/api/status")
+            requests.get(f"{SERVER_URL}/api/status", verify=False)
             print("Brain is Online.")
-        except:
-            print("WARNING: Brain (Server) appears offline. Start run_server.bat first!")
+        except Exception as e:
+            print(f"WARNING: Brain (Server) appears offline. Start run_server.bat first! Error: {e}")
 
         device_info = sd.query_devices(kind='input')
         print(f"Using Input Device: {device_info['name']}")
@@ -109,7 +112,7 @@ class CherryClient(QThread):
         try:
             print("Sending audio to Brain...")
             files = {'audio': ('command.wav', mem_file, 'audio/wav')}
-            response = requests.post(f"{SERVER_URL}/api/voice", files=files)
+            response = requests.post(f"{SERVER_URL}/api/voice", files=files, verify=False)
             
             if response.status_code == 200:
                 data = response.json()

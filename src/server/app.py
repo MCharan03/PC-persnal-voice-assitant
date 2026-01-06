@@ -135,4 +135,6 @@ def handle_server_actions(response):
 
 if __name__ == '__main__':
     # Run on 0.0.0.0 to be accessible on the local network
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # HTTPS is required for microphone access on non-localhost devices
+    # Browsers will warn about 'Self-Signed Certificate' -> Click Advanced -> Proceed
+    app.run(host='0.0.0.0', port=5000, debug=True, ssl_context='adhoc')
