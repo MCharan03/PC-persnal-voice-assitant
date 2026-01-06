@@ -61,8 +61,14 @@ def main():
     app.setQuitOnLastWindowClosed(False)
 
     # System Tray Setup
-    tray_icon = QSystemTrayIcon(QIcon(os.path.join(BASE_DIR, "assets", "icon.png")), app)
-    # If no icon exists, it might be invisible. Let's create a simple fallback later or rely on system default.
+    icon_path = os.path.join(BASE_DIR, "assets", "icon.png")
+    if os.path.exists(icon_path):
+        icon = QIcon(icon_path)
+    else:
+        # Fallback to system icon if icon.png is missing
+        icon = app.style().standardIcon(app.style().StandardPixmap.SP_ComputerIcon)
+    
+    tray_icon = QSystemTrayIcon(icon, app)
     
     menu = QMenu()
     
