@@ -1,35 +1,56 @@
 import torch
 import os
 
-if os.name == 'nt' and torch.cuda.is_available():
-    libs_path = os.path.join(os.path.dirname(torch.__file__), 'lib')
-    if os.path.exists(libs_path):
-        os.add_dll_directory(libs_path)
-
+# We no longer need the CUDA injection here as we are forcing CPU for wake word
 from faster_whisper import WhisperModel
 import numpy as np
 
 class WakeWord:
     def __init__(self, keyword="cherry"):
-        print(f"Initializing keyword spotter for: '{keyword}'...")
+        print(f"Initializing Wake Word Engine (CPU Optimized) for: '{keyword}'...")
         self.keyword = keyword.lower()
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        # Using the absolute smallest model for wake word to save GPU
-        self.model = WhisperModel("tiny.en", device=device, compute_type="float16" if device == "cuda" else "int8")
-        print("Keyword spotter ready.")
+        
+        # Optimization: Run Wake Word on CPU to save GPU VRAM for the LLM & Main STT
+        # 'tiny.en' is extremely fast on CPU (int8)
+        device = "cpu" 
+        compute_type = "int8"
+        
+        try:
+            self.model = WhisperModel("tiny.en", device=device, compute_type=compute_type)
+            print(f"Wake Word Monitor running on {device.upper()} (lightweight).")
+        except Exception as e:
+            print(f"Error initializing Wake Word: {e}")
+            self.model = None
 
     def detect(self, audio_data):
         """
-        Transcribes a small chunk of audio and checks if 'Cherry' is in it.
+        Transcribes a small chunk of audio and checks if 'Hi' is in it.
         """
-        segments, _ = self.model.transcribe(audio_data, beam_size=1)
-        for segment in segments:
-            text = segment.text.lower()
-            if self.keyword in text:
-                return True
+        if not self.model: return False
+        
+        # Variations allowed (Jarvis is more distinct than Hi)
+        triggers = ["jarvis", "service", "jervis"]
+        
+        try:
+            segments, _ = self.model.transcribe(audio_data, beam_size=1)
+            for segment in segments:
+                text = segment.text.lower().strip()
+                # Remove punctuation
+                import string
+                text = text.translate(str.maketrans('', '', string.punctuation))
+                
+                print(f"Heard: '{text}'") # Debug enabled
+                
+                # Check for exact match of short words to avoid false positives inside other words
+                words = text.split()
+                if any(word in triggers for word in words):
+                    return True
+                    
+        except Exception as e:
+            print(f"Wake Word Error: {e}")
+            
         return False
 
 if __name__ == "__main__":
-    # Test script requires microphone input logic, so we just init here
     ww = WakeWord()
     print("Wake Word Engine ready.")

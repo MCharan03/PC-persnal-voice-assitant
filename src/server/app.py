@@ -1,5 +1,6 @@
 import sys
 import os
+import traceback
 from flask import Flask, request, jsonify, render_template
 
 # Add the src directory to sys.path to allow importing modules
@@ -26,11 +27,14 @@ def home():
 @app.route('/api/status', methods=['GET'])
 def get_status():
     """Returns the health and system stats of the assistant host."""
-    stats = hands.get_system_stats()
-    return jsonify({
-        "status": "online",
-        "system_stats": stats
-    })
+    try:
+        stats = hands.get_system_stats()
+        return jsonify({
+            "status": "online",
+            "system_stats": stats
+        })
+    except Exception:
+        return jsonify({"status": "error", "message": "Health check failed"}), 500
 
 @app.route('/api/voice', methods=['POST'])
 def voice_command():
@@ -38,43 +42,62 @@ def voice_command():
     Accepts an audio file (blob/wav), transcribes it (STT),
     and sends the text to the Brain (LLM).
     """
-    if 'audio' not in request.files:
-        return jsonify({"error": "No audio file provided"}), 400
-        
-    audio_file = request.files['audio']
-    if audio_file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
-
-    # Save to temp file for processing
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-        audio_file.save(tmp.name)
-        tmp_path = tmp.name
-
     try:
-        print(f"[API] Processing audio: {tmp_path}")
-        # Transcribe (Server-side STT)
-        user_text = ears.transcribe(tmp_path)
-        print(f"[API] Transcribed: {user_text}")
-        
-        if not user_text:
-            return jsonify({"error": "Could not understand audio"}), 400
+        if 'audio' not in request.files:
+            return jsonify({"error": "No audio file provided"}), 400
             
-        # Ask Brain
-        response_text = brain.chat(user_text)
-        
-        # Execute Actions
-        clean_response = handle_server_actions(response_text)
-        
-        return jsonify({
-            "transcription": user_text,
-            "response": clean_response,
-            "original_response": response_text
-        })
-        
-    finally:
-        # Cleanup temp file
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+        audio_file = request.files['audio']
+        if audio_file.filename == '':
+            return jsonify({"error": "No selected file"}), 400
+
+        # Save to temp file for processing
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+            audio_file.save(tmp.name)
+            tmp_path = tmp.name
+
+        try:
+            import time
+            start_time = time.time()
+            
+            print(f"[API] Processing audio: {tmp_path}")
+            
+            # 1. Transcribe (Server-side STT)
+            t0 = time.time()
+            user_text = ears.transcribe(tmp_path)
+            t1 = time.time()
+            print(f"[Timing] STT took: {t1 - t0:.2f}s")
+            print(f"[API] Transcribed: {user_text}")
+            
+            if not user_text:
+                return jsonify({"error": "Could not understand audio"}), 400
+                
+            # 2. Ask Brain
+            t2 = time.time()
+            response_text = brain.chat(user_text)
+            t3 = time.time()
+            print(f"[Timing] LLM took: {t3 - t2:.2f}s")
+            
+            # 3. Execute Actions
+            clean_response = handle_server_actions(response_text)
+            
+            total_time = time.time() - start_time
+            print(f"[Timing] TOTAL Request time: {total_time:.2f}s")
+            
+            return jsonify({
+                "transcription": user_text,
+                "response": clean_response,
+                "original_response": response_text
+            })
+            
+        finally:
+            # Cleanup temp file
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+                
+    except Exception as e:
+        print("!!! SERVER ERROR !!!")
+        traceback.print_exc() # Print full error to console
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/chat', methods=['POST'])
 def chat():
@@ -115,6 +138,22 @@ def handle_server_actions(response):
     if "[STATS]" in response:
         stats = hands.get_system_stats()
         response = response.replace("[STATS]", "") + f" {stats}"
+    
+    if "[TIME]" in response:
+        time_str = hands.get_time()
+        response = response.replace("[TIME]", "") + f" {time_str}"
+        
+    if "[DATE]" in response:
+        date_str = hands.get_date()
+        response = response.replace("[DATE]", "") + f" {date_str}"
+        
+    if "[MINIMIZE]" in response:
+        hands.minimize_all()
+        response = response.replace("[MINIMIZE]", "")
+        
+    if "[SCREENSHOT]" in response:
+        result = hands.take_screenshot()
+        response = response.replace("[SCREENSHOT]", "") + f" {result}"
         
     match = re.search(r"\[OPEN:\s*(.*?)\]", response)
     if match:
@@ -124,6 +163,11 @@ def handle_server_actions(response):
     match = re.search(r"\[SEARCH:\s*(.*?)\]", response)
     if match:
         hands.search_web(match.group(1))
+        response = response.replace(match.group(0), "")
+        
+    match = re.search(r"\[PLAY:\s*(.*?)\]", response)
+    if match:
+        hands.play_youtube(match.group(1))
         response = response.replace(match.group(0), "")
         
     match = re.search(r"\[VOLUME:\s*(.*?)\]", response)

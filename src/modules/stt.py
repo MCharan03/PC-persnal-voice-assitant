@@ -10,11 +10,20 @@ from faster_whisper import WhisperModel
 import numpy as np
 
 class STT:
-    def __init__(self, model_size="small.en"):
-        print(f"Initializing STT with model: {model_size}...")
+    def __init__(self, model_size="base.en"):
+        print(f"Initializing Main Speech-to-Text (STT) Engine...")
+        
         # Use CUDA for RTX 4050 speed
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = WhisperModel(model_size, device=device, compute_type="float16" if device == "cuda" else "int8")
+        if torch.cuda.is_available():
+            device = "cuda"
+            compute_type = "float16"
+            print(">> STT using GPU (CUDA) for high-speed transcription.")
+        else:
+            device = "cpu"
+            compute_type = "int8"
+            print(">> STT using CPU (GPU not found).")
+            
+        self.model = WhisperModel(model_size, device=device, compute_type=compute_type)
         print("STT initialized successfully.")
 
     def transcribe(self, audio_data):

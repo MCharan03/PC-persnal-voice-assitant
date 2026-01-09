@@ -20,14 +20,12 @@ from modules.tts import TTS
 from modules.wake_word import WakeWord
 from modules.vad import VAD
 from modules.actions import Actions
-from gui import Overlay
+from gui import ModernHUD
 
 class CherryWorker(QThread):
     # Signals to update GUI
-    sig_listening = pyqtSignal()
-    sig_processing = pyqtSignal()
-    sig_speaking = pyqtSignal()
-    sig_idle = pyqtSignal()
+    sig_state = pyqtSignal(str) # "IDLE", "LISTENING", "THINKING", "SPEAKING"
+    sig_text = pyqtSignal(str, str) # user_text, ai_text
     
     def __init__(self):
         super().__init__()
@@ -37,13 +35,15 @@ class CherryWorker(QThread):
         
     def run(self):
         print("--- Initializing Cherry Core ---")
+        self.sig_state.emit("IDLE")
+        self.sig_text.emit("System Initializing...", "Loading Modules...")
         
         # Audio Settings
         self.sample_rate = 16000
         self.chunk_size = 1024 
         
         # Modules
-        self.wake_word = WakeWord(keyword="cherry")
+        self.wake_word = WakeWord(keyword="hi")
         self.stt = STT()
         self.llm = LLM()
         self.tts = TTS()
@@ -53,7 +53,8 @@ class CherryWorker(QThread):
         self.audio_buffer = []
         self.wake_buffer = [] 
         
-        print("--- Cherry is Ready. Say 'Cherry' ---")
+        print("--- Cherry is Ready. Say 'Hi' ---")
+        self.sig_text.emit("System Online", "Ready. Say 'Hi'")
         
         # Open audio stream
         device_info = sd.query_devices(kind='input')
@@ -78,6 +79,12 @@ class CherryWorker(QThread):
         self.audio_queue.put(indata.copy().squeeze())
 
     def process_audio(self, audio_data):
+        # Prevent hearing itself
+        if self.tts.is_busy():
+            self.wake_buffer = []
+            self.audio_buffer = []
+            return
+
         # Debug: Show volume level periodically (every ~20 chunks) to verify mic
         rms = np.sqrt(np.mean(audio_data**2))
         if np.random.rand() < 0.1: # Print more frequently (10%)
@@ -100,7 +107,9 @@ class CherryWorker(QThread):
                         self.is_listening = True
                         self.audio_buffer = [] 
                         self.wake_buffer = []
-                        self.sig_listening.emit() 
+                        
+                        self.sig_state.emit("LISTENING")
+                        self.sig_text.emit("Listening...", "")
                         self.tts.speak("Yes?")
         else:
             # ACTIVE: Listen until silence
@@ -110,25 +119,27 @@ class CherryWorker(QThread):
             if vad_status == 1: # Speech ended
                 print("\n[!] Silence detected. Processing...")
                 self.is_listening = False
-                self.sig_processing.emit()
+                self.sig_state.emit("THINKING")
                 
                 # Capture full audio
                 full_audio = np.concatenate(self.audio_buffer)
                 self.process_command(full_audio)
                 
-                self.sig_idle.emit() 
+                self.sig_state.emit("IDLE") 
 
     def process_command(self, audio_data):
         text = self.stt.transcribe(audio_data)
         if not text or len(text) < 2:
             print("No speech recognized.")
+            self.sig_text.emit("...", "I didn't catch that.")
             return
 
         print(f"User: {text}")
         response = self.llm.chat(text)
         clean_response = self.handle_actions(response)
         
-        self.sig_speaking.emit()
+        self.sig_text.emit(text, clean_response)
+        self.sig_state.emit("SPEAKING")
         self.tts.speak(clean_response)
 
     def handle_actions(self, response):
@@ -136,6 +147,19 @@ class CherryWorker(QThread):
         if "[STATS]" in response:
             stats = self.actions.get_system_stats()
             response = response.replace("[STATS]", "") + f" {stats}"
+        if "[TIME]" in response:
+            time_str = self.actions.get_time()
+            response = response.replace("[TIME]", "") + f" {time_str}"
+        if "[DATE]" in response:
+            date_str = self.actions.get_date()
+            response = response.replace("[DATE]", "") + f" {date_str}"
+        if "[MINIMIZE]" in response:
+            self.actions.minimize_all()
+            response = response.replace("[MINIMIZE]", "")
+        if "[SCREENSHOT]" in response:
+            result = self.actions.take_screenshot()
+            response = response.replace("[SCREENSHOT]", "") + f" {result}"
+
         match = re.search(r"\[OPEN:\s*(.*?)\]", response)
         if match:
             self.actions.open_app(match.group(1))
@@ -143,6 +167,10 @@ class CherryWorker(QThread):
         match = re.search(r"\[SEARCH:\s*(.*?)\]", response)
         if match:
             self.actions.search_web(match.group(1))
+            response = response.replace(match.group(0), "")
+        match = re.search(r"\[PLAY:\s*(.*?)\]", response)
+        if match:
+            self.actions.play_youtube(match.group(1))
             response = response.replace(match.group(0), "")
         match = re.search(r"\[VOLUME:\s*(.*?)\]", response)
         if match:
@@ -152,9 +180,12 @@ class CherryWorker(QThread):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    overlay = Overlay()
+    hud = ModernHUD()
     worker = CherryWorker()
-    worker.sig_listening.connect(overlay.show_overlay)
-    worker.sig_idle.connect(overlay.hide_overlay)
+    
+    worker.sig_state.connect(hud.set_state)
+    worker.sig_text.connect(hud.set_text)
+    
+    hud.show()
     worker.start()
     sys.exit(app.exec())

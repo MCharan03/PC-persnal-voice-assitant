@@ -3,10 +3,15 @@ import subprocess
 import webbrowser
 import psutil
 import pyautogui
+import datetime
+from pytubefix import Search
 
 class Actions:
     def __init__(self):
         print("Action module initialized.")
+        self.screenshot_dir = os.path.join(os.getcwd(), "screenshots")
+        if not os.path.exists(self.screenshot_dir):
+            os.makedirs(self.screenshot_dir)
 
     def open_app(self, app_name):
         """Attempts to open a common application."""
@@ -17,6 +22,15 @@ class Actions:
             subprocess.Popen(["notepad.exe"])
         elif "code" in app_name or "vs code" in app_name:
             subprocess.Popen(["code"], shell=True)
+        elif "spotify" in app_name:
+            # Try default spotify path or shell command
+            try:
+                subprocess.Popen(["spotify"], shell=True)
+            except:
+                pyautogui.press('win')
+                time.sleep(0.1)
+                pyautogui.write("Spotify")
+                pyautogui.press('enter')
         else:
             # Fallback: Try searching for it
             pyautogui.press('win')
@@ -40,6 +54,44 @@ class Actions:
         url = f"https://www.google.com/search?q={query}"
         webbrowser.open(url)
         return f"Searching for {query} on the web."
+        
+    def play_youtube(self, query):
+        """Plays a video on YouTube."""
+        try:
+            print(f"Searching YouTube for: {query}")
+            # Try to get the first video result
+            s = Search(query)
+            results = s.videos
+            if results:
+                first_video = results[0]
+                url = first_video.watch_url
+                webbrowser.open(url)
+                return f"Playing {first_video.title} on YouTube."
+            else:
+                raise Exception("No results found")
+        except Exception as e:
+            print(f"YouTube Search Error: {e}. Falling back to generic search.")
+            url = f"https://www.youtube.com/results?search_query={query}"
+            webbrowser.open(url)
+            return f"Opening YouTube search for {query}."
+
+    def get_time(self):
+        now = datetime.datetime.now()
+        return f"It is currently {now.strftime('%I:%M %p')}."
+
+    def get_date(self):
+        now = datetime.datetime.now()
+        return f"Today is {now.strftime('%A, %B %d, %Y')}."
+
+    def minimize_all(self):
+        pyautogui.hotkey('win', 'd')
+        return "Minimizing all windows."
+
+    def take_screenshot(self):
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = os.path.join(self.screenshot_dir, f"screenshot_{timestamp}.png")
+        pyautogui.screenshot(filename)
+        return f"Screenshot saved."
 
     def adjust_volume(self, direction):
         """Adjusts system volume."""

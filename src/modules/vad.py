@@ -1,8 +1,9 @@
 import numpy as np
 
 class VAD:
-    def __init__(self, threshold=0.01, silence_duration=1.5, sample_rate=16000):
+    def __init__(self, threshold=0.01, silence_duration=0.6, sample_rate=16000):
         self.threshold = threshold
+        # Reduced silence duration for snappier response (was 1.5s)
         self.silence_limit = int(silence_duration * (sample_rate / 1024)) # approx chunks
         self.silence_counter = 0
         self.is_speaking = False

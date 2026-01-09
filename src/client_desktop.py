@@ -14,15 +14,14 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from modules.wake_word import WakeWord
 from modules.vad import VAD
 from modules.tts import TTS
-from gui import Overlay
+from gui import ModernHUD
 
 SERVER_URL = "https://localhost:5000"
 
 class CherryClient(QThread):
-    sig_listening = pyqtSignal()
-    sig_processing = pyqtSignal()
-    sig_speaking = pyqtSignal()
-    sig_idle = pyqtSignal()
+    # Updated Signals for ModernHUD
+    sig_state = pyqtSignal(str) # "IDLE", "LISTENING", "THINKING", "SPEAKING"
+    sig_text = pyqtSignal(str, str) # user_text, ai_text
     
     def __init__(self):
         super().__init__()
@@ -36,7 +35,7 @@ class CherryClient(QThread):
         print("--- Initializing Cherry Client ---")
         
         # Local "Reflexes" (Wake Word & VAD need to be local for zero latency)
-        self.wake_word = WakeWord(keyword="cherry")
+        self.wake_word = WakeWord(keyword="jarvis")
         self.vad = VAD(threshold=0.02)
         
         # Local Voice Output
@@ -47,11 +46,26 @@ class CherryClient(QThread):
         self.wake_buffer = []
         
         print(f"Connecting to Brain at {SERVER_URL}...")
-        try:
-            requests.get(f"{SERVER_URL}/api/status", verify=False)
-            print("Brain is Online.")
-        except Exception as e:
-            print(f"WARNING: Brain (Server) appears offline. Start run_server.bat first! Error: {e}")
+        self.sig_state.emit("IDLE")
+        
+        # Retry Loop for Server Connection
+        connected = False
+        for i in range(1, 16): # Try 15 times (30 seconds)
+            try:
+                self.sig_text.emit("System Initializing...", f"Connecting... ({i}/15)")
+                requests.get(f"{SERVER_URL}/api/status", verify=False, timeout=2)
+                print("Brain is Online.")
+                self.sig_text.emit("System Online", "Ready. Say 'Jarvis'")
+                connected = True
+                break
+            except Exception as e:
+                print(f"Waiting for Brain... ({i}/15) - {e}")
+                time.sleep(2)
+        
+        if not connected:
+            print(f"WARNING: Brain (Server) appears offline after multiple attempts.")
+            self.sig_text.emit("Connection Failed", "Brain is offline.")
+            self.tts.speak("I cannot connect to my brain. Please check the server.")
 
         device_info = sd.query_devices(kind='input')
         print(f"Using Input Device: {device_info['name']}")
@@ -65,10 +79,24 @@ class CherryClient(QThread):
                     continue
 
     def audio_callback(self, indata, frames, time, status):
-        if status: print(status, file=sys.stderr)
+        if status: 
+            print(f"Audio Error: {status}", file=sys.stderr)
         self.audio_queue.put(indata.copy().squeeze())
 
     def process_stream(self, audio_data):
+        # Prevent hearing itself
+        if self.tts.is_busy():
+            self.wake_buffer = []
+            self.audio_buffer = []
+            return
+
+        # Calculate volume level
+        rms = np.sqrt(np.mean(audio_data**2))
+        
+        # DEBUG: Print volume level every 10th chunk to verify mic is working
+        if np.random.rand() < 0.1:
+            print(f"Mic Level: {rms:.4f}")
+
         if not self.is_listening:
             # Wake Word Detection (Local)
             self.wake_buffer.append(audio_data)
@@ -81,7 +109,9 @@ class CherryClient(QThread):
                     self.is_listening = True
                     self.audio_buffer = []
                     self.wake_buffer = []
-                    self.sig_listening.emit()
+                    
+                    self.sig_state.emit("LISTENING")
+                    self.sig_text.emit("Listening...", "")
                     self.tts.speak("Yes?")
         else:
             # VAD / Recording
@@ -89,13 +119,19 @@ class CherryClient(QThread):
             status = self.vad.process_chunk(audio_data)
             if status == 1: # Silence detected
                 self.is_listening = False
-                self.sig_processing.emit()
+                self.sig_state.emit("THINKING")
                 
                 # Send to Server
                 full_audio = np.concatenate(self.audio_buffer)
                 self.send_to_brain(full_audio)
                 
-                self.sig_idle.emit()
+                # CRITICAL FIX: Flush the audio queue to remove 'stale' audio 
+                # recorded while the AI was thinking/speaking.
+                with self.audio_queue.mutex:
+                    self.audio_queue.queue.clear()
+                
+                print("--- Cycle Complete. Listening for 'Jarvis' ---")
+                self.sig_state.emit("IDLE")
 
     def send_to_brain(self, audio_data):
         """
@@ -117,25 +153,33 @@ class CherryClient(QThread):
             if response.status_code == 200:
                 data = response.json()
                 reply = data.get('response', '')
+                transcription = data.get('transcription', '(Unknown)')
+                
                 print(f"Brain: {reply}")
                 
-                self.sig_speaking.emit()
+                self.sig_text.emit(transcription, reply)
+                self.sig_state.emit("SPEAKING")
+                
                 self.tts.speak(reply)
             else:
                 print(f"Server Error: {response.text}")
+                self.sig_text.emit("Error", "Server Error")
                 self.tts.speak("I'm having trouble connecting to my brain.")
                 
         except Exception as e:
             print(f"Network Error: {e}")
+            self.sig_text.emit("Network Error", str(e))
             self.tts.speak("Network error.")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    overlay = Overlay()
+    hud = ModernHUD()
     client = CherryClient()
     
-    client.sig_listening.connect(overlay.show_overlay)
-    client.sig_idle.connect(overlay.hide_overlay)
+    # Connect signals
+    client.sig_state.connect(hud.set_state)
+    client.sig_text.connect(hud.set_text)
     
+    hud.show()
     client.start()
     sys.exit(app.exec())
