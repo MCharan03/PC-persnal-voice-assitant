@@ -28,7 +28,11 @@ class STT:
 
     def transcribe(self, audio_data):
         """
-        Transcribes audio data (numpy array) to text.
+        Transcribes audio data to text.
+        
+        Args:
+            audio_data: Can be a file path (str), a binary file-like object (BytesIO), 
+                        or a numpy array (np.ndarray).
         """
         segments, info = self.model.transcribe(audio_data, beam_size=5)
         text = " ".join([segment.text for segment in segments]).strip()

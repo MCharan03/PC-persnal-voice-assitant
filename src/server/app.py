@@ -10,9 +10,13 @@ from modules.llm import LLM
 from modules.actions import Actions
 from modules.stt import STT
 from modules.command_processor import CommandProcessor
-import tempfile
+from flask_socketio import SocketIO, emit
+from io import BytesIO
 
 app = Flask(__name__)
+# Enable WebSockets
+socketio = SocketIO(app, cors_allowed_origins="*")
+
 print("--- Initializing Server Core ---")
 
 # Initialize Core Modules
@@ -52,20 +56,17 @@ def voice_command():
         if audio_file.filename == '':
             return jsonify({"error": "No selected file"}), 400
 
-        # Save to temp file for processing
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-            audio_file.save(tmp.name)
-            tmp_path = tmp.name
-
         try:
             import time
             start_time = time.time()
             
-            print(f"[API] Processing audio: {tmp_path}")
+            # Read file into memory (No Disk I/O)
+            audio_data = BytesIO(audio_file.read())
             
             # 1. Transcribe (Server-side STT)
             t0 = time.time()
-            user_text = ears.transcribe(tmp_path)
+            # Faster-Whisper can read directly from the BytesIO object
+            user_text = ears.transcribe(audio_data)
             t1 = time.time()
             print(f"[Timing] STT took: {t1 - t0:.2f}s")
             print(f"[API] Transcribed: {user_text}")
@@ -90,11 +91,6 @@ def voice_command():
                 "response": clean_response,
                 "original_response": response_text
             })
-            
-        finally:
-            # Cleanup temp file
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
                 
     except Exception as e:
         print("!!! SERVER ERROR !!!")
@@ -128,8 +124,15 @@ def chat():
         "clean_response": clean_response
     })
 
+# WebSocket Events
+@socketio.on('connect')
+def handle_connect():
+    print('[Socket] Client connected')
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    print('[Socket] Client disconnected')
+
 if __name__ == '__main__':
-    # Run on 0.0.0.0 to be accessible on the local network
-    # HTTPS is required for microphone access on non-localhost devices
-    # Browsers will warn about 'Self-Signed Certificate' -> Click Advanced -> Proceed
-    app.run(host='0.0.0.0', port=5000, debug=True, ssl_context='adhoc')
+    # Run using SocketIO
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True, ssl_context='adhoc')

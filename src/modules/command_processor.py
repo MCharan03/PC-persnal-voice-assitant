@@ -68,4 +68,11 @@ class CommandProcessor:
             self.actions.control_media(match.group(1))
             response = response.replace(match.group(0), "")
 
+        # LIGHTS (Smart Home Stub)
+        match = re.search(r"\[LIGHTS:\s*(.*?)\]", response)
+        if match:
+            # TODO: Integrate with Phillips Hue / Home Assistant
+            print(f"[Smart Home] Executing Light Command: {match.group(1)}")
+            response = response.replace(match.group(0), "")
+
         return response.strip()

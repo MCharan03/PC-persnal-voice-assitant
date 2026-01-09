@@ -2,6 +2,7 @@ import sys
 import time
 import queue
 import numpy as np
+import scipy.signal
 import sounddevice as sd
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QThread, pyqtSignal, QObject
@@ -94,12 +95,16 @@ class CherryWorker(QThread):
         if status:
             print(status, file=sys.stderr)
         
-        # Simple downsampling (decimation)
-        # e.g., if factor is 3, take every 3rd sample [0, 3, 6...]
-        downsampled = indata[::self.downsample_factor]
+        # High-quality resampling using Fourier method
+        # Calculates new length based on ratio
+        new_length = int(len(indata) / self.downsample_factor)
+        downsampled = scipy.signal.resample(indata, new_length)
+        
+        # Cast to float32 (Whisper expects float32)
+        downsampled = downsampled.astype(np.float32)
         
         # Push to queue to avoid blocking the audio thread
-        self.audio_queue.put(downsampled.copy().squeeze())
+        self.audio_queue.put(downsampled.squeeze())
 
     def process_audio(self, audio_data):
         # Prevent hearing itself
