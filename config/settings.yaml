@@ -1,0 +1,17 @@
+system:
+  native_rate: 48000
+  target_rate: 16000
+
+vad:
+  threshold: 0.0005
+
+wake_word:
+  keyword: "hey jarvis"
+
+llm:
+  model: "llama3.2"
+
+tts:
+  model_path: "assets/models/kokoro-v1.0.onnx"
+  voices_path: "assets/models/voices-v1.0.bin"
+  voice_name: "af_heart"

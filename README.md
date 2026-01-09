@@ -14,15 +14,17 @@
     *   Adjust Volume
     *   Check System Stats (CPU, RAM, Battery)
     *   Perform Web Searches
+*   **Remote Server API:** Control your PC from other devices via the Flask server.
 
 ## 🛠️ Tech Stack
 
 - **Language:** Python 3.13
 - **Speech-to-Text (STT):** `Faster-Whisper` (running on CUDA)
 - **Large Language Model (LLM):** `Ollama` (Llama 3.2 3B)
-- **Text-to-Speech (TTS):** `pyttsx3` (System Voice) / `Kokoro` (Planned)
+- **Text-to-Speech (TTS):** `Kokoro` (High Quality) / `pyttsx3` (Fallback)
 - **Wake Word:** `openWakeWord`
 - **GUI:** `PyQt6`
+- **Server:** `Flask`
 - **Automation:** `pyautogui`, `psutil`, `subprocess`
 
 ## 📦 Installation & Setup
@@ -46,46 +48,60 @@
     ```
     *(Note: Ensure PyTorch is installed with CUDA support)*
 
-4.  Run Cherry:
+4.  **Configuration:**
+    Check `config/settings.yaml` to adjust VAD sensitivity, models, or wake words.
+
+5.  Run Cherry:
     ```powershell
     python src/main.py
     ```
 
 ## 🎮 Usage
 
-1.  Run the script. Cherry will start silently in the background.
+### Desktop Mode
+1.  Run `src/main.py`. Cherry will start silently in the background.
 2.  Say **"Hey Jarvis"**.
 3.  A cyan orb will appear on your screen. Speak your command.
-4.  **Examples:**
-    *   "Open Google Chrome."
-    *   "Search for the latest tech news."
-    *   "Turn the volume up."
-    *   "How is my battery looking?"
+
+### Server Mode (Mobile Support)
+Run the server to accept remote commands:
+```powershell
+python src/server/app.py
+```
+*   **Endpoint:** `http://YOUR_PC_IP:5000/api/voice` (POST .wav file)
+*   **Endpoint:** `http://YOUR_PC_IP:5000/api/chat` (POST JSON `{"text": "..."}`)
+
+This allows you to control your PC (e.g., "Volume Up", "Open Steam") from a mobile app connected to the same network.
 
 ## 🗓️ Project Roadmap
 
 - [x] **Phase 1: Core System** (STT, LLM, Basic TTS, Wake Word) - *Completed*
 - [x] **Phase 2: Visual Interface** (PyQt6 Overlay) - *Completed*
 - [x] **Phase 3: PC Control** (App launching, System stats) - *Completed*
-- [ ] **Phase 4: Advanced Voice** (Integrate high-quality Kokoro TTS)
+- [x] **Phase 4: Server API** (Remote control) - *Completed*
 - [ ] **Phase 5: Custom Wake Word** (Train "Hey Cherry" model)
 - [ ] **Phase 6: Memory** (Remember user preferences across sessions)
 
 ## 📂 Directory Structure
 
 ```
-E:\persnal voicde assitant\
+E:\personal voice assitant\
 ├── assets/              # Models and Icons
-├── docs/                # Chat logs and documentation
+├── config/              # Configuration (settings.yaml)
+├── scripts/             # Helper scripts and tests
 ├── src/
 │   ├── modules/
-│   │   ├── actions.py   # PC Control Logic
-│   │   ├── llm.py       # Ollama Integration
-│   │   ├── stt.py       # Whisper Speech Recognition
-│   │   ├── tts.py       # Text-to-Speech
-│   │   ├── vad.py       # Voice Activity Detection
-│   │   └── wake_word.py # Wake Word Engine
-│   ├── gui.py           # Visual Overlay (PyQt6)
-│   └── main.py          # Core Application Loop
-└── venv/                # Python Virtual Environment
+│   │   ├── actions.py           # PC Control Logic
+│   │   ├── command_processor.py # Central Command Parser
+│   │   ├── llm.py               # Ollama Integration
+│   │   ├── stt.py               # Whisper Speech Recognition
+│   │   ├── tts.py               # Text-to-Speech
+│   │   ├── vad.py               # Voice Activity Detection
+│   │   └── wake_word.py         # Wake Word Engine
+│   ├── server/
+│   │   └── app.py               # Flask Server
+│   ├── gui.py                   # Visual Overlay (PyQt6)
+│   ├── main.py                  # Core Application Loop
+│   └── config.py                # Configuration Loader
+└── venv/                        # Python Virtual Environment
 ```

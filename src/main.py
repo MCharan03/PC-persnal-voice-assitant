@@ -19,7 +19,8 @@ from modules.llm import LLM
 from modules.tts import TTS
 from modules.wake_word import WakeWord
 from modules.vad import VAD
-from modules.actions import Actions
+from modules.command_processor import CommandProcessor
+from config import settings
 from gui import ModernHUD
 
 class CherryWorker(QThread):
@@ -30,7 +31,7 @@ class CherryWorker(QThread):
     def __init__(self):
         super().__init__()
         self.running = True
-        self.actions = Actions()
+        self.processor = CommandProcessor()
         self.audio_queue = queue.Queue()
         
     def run(self):
@@ -39,17 +40,17 @@ class CherryWorker(QThread):
         self.sig_text.emit("System Initializing...", "Loading Modules...")
         
         # Audio Settings
-        self.native_rate = 48000 # Native rate for WASAPI
-        self.target_rate = 16000 # Rate for AI (Whisper)
+        self.native_rate = settings['system']['native_rate']
+        self.target_rate = settings['system']['target_rate']
         self.downsample_factor = int(self.native_rate / self.target_rate)
-        self.chunk_size = 1024 * self.downsample_factor # Read 3x samples to get 1024 after downsampling
+        self.chunk_size = 1024 * self.downsample_factor 
         
         # Modules
-        self.wake_word = WakeWord(keyword="hey jarvis")
+        self.wake_word = WakeWord(keyword=settings['wake_word']['keyword'])
         self.stt = STT()
         self.llm = LLM()
         self.tts = TTS()
-        self.vad = VAD(threshold=0.0005) # Increased sensitivity
+        self.vad = VAD(threshold=settings['vad']['threshold'])
         
         self.is_listening = False
         self.audio_buffer = []
@@ -151,51 +152,11 @@ class CherryWorker(QThread):
 
         print(f"User: {text}")
         response = self.llm.chat(text)
-        clean_response = self.handle_actions(response)
+        clean_response = self.processor.process(response)
         
         self.sig_text.emit(text, clean_response)
         self.sig_state.emit("SPEAKING")
         self.tts.speak(clean_response)
-
-    def handle_actions(self, response):
-        import re
-        if "[STATS]" in response:
-            stats = self.actions.get_system_stats()
-            response = response.replace("[STATS]", "") + f" {stats}"
-        if "[TIME]" in response:
-            time_str = self.actions.get_time()
-            response = response.replace("[TIME]", "") + f" {time_str}"
-        if "[DATE]" in response:
-            date_str = self.actions.get_date()
-            response = response.replace("[DATE]", "") + f" {date_str}"
-        if "[MINIMIZE]" in response:
-            self.actions.minimize_all()
-            response = response.replace("[MINIMIZE]", "")
-        if "[SCREENSHOT]" in response:
-            result = self.actions.take_screenshot()
-            response = response.replace("[SCREENSHOT]", "") + f" {result}"
-
-        match = re.search(r"\[OPEN:\s*(.*?)\]", response)
-        if match:
-            self.actions.open_app(match.group(1))
-            response = response.replace(match.group(0), "")
-        match = re.search(r"\[SEARCH:\s*(.*?)\]", response)
-        if match:
-            self.actions.search_web(match.group(1))
-            response = response.replace(match.group(0), "")
-        match = re.search(r"\[PLAY:\s*(.*?)\]", response)
-        if match:
-            self.actions.play_youtube(match.group(1))
-            response = response.replace(match.group(0), "")
-        match = re.search(r"\[VOLUME:\s*(.*?)\]", response)
-        if match:
-            self.actions.adjust_volume(match.group(1))
-            response = response.replace(match.group(0), "")
-        match = re.search(r"\[MEDIA:\s*(.*?)\]", response)
-        if match:
-            self.actions.control_media(match.group(1))
-            response = response.replace(match.group(0), "")
-        return response.strip()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

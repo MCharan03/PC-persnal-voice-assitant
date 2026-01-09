@@ -5,6 +5,7 @@ import os
 import numpy as np
 import sounddevice as sd
 from kokoro_onnx import Kokoro
+from config import settings
 
 class TTS:
     _instance = None
@@ -54,8 +55,8 @@ class TTS:
         """
         Runs in a dedicated thread. Initializes Kokoro-ONNX locally.
         """
-        model_path = os.path.join("assets", "models", "kokoro-v1.0.onnx")
-        voices_path = os.path.join("assets", "models", "voices-v1.0.bin")
+        model_path = settings['tts']['model_path']
+        voices_path = settings['tts']['voices_path']
         
         if not os.path.exists(model_path) or not os.path.exists(voices_path):
             print(f"ERROR: Kokoro model files not found at {model_path}")
@@ -64,7 +65,7 @@ class TTS:
         try:
             kokoro = Kokoro(model_path, voices_path)
             # Default voice
-            voice_name = "af_heart"
+            voice_name = settings['tts']['voice_name']
             print(f"Kokoro TTS initialized with voice: {voice_name}")
         except Exception as e:
             print(f"Failed to initialize Kokoro: {e}")

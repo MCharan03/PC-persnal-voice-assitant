@@ -9,6 +9,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from modules.llm import LLM
 from modules.actions import Actions
 from modules.stt import STT
+from modules.command_processor import CommandProcessor
 import tempfile
 
 app = Flask(__name__)
@@ -18,6 +19,7 @@ print("--- Initializing Server Core ---")
 brain = LLM()
 hands = Actions()
 ears = STT()
+processor = CommandProcessor(hands)
 
 @app.route('/')
 def home():
@@ -78,7 +80,7 @@ def voice_command():
             print(f"[Timing] LLM took: {t3 - t2:.2f}s")
             
             # 3. Execute Actions
-            clean_response = handle_server_actions(response_text)
+            clean_response = processor.process(response_text)
             
             total_time = time.time() - start_time
             print(f"[Timing] TOTAL Request time: {total_time:.2f}s")
@@ -119,63 +121,12 @@ def chat():
     
     # Process Actions (Server-side execution)
     # If the phone user says "Open Calculator", it opens on the PC (The Server).
-    clean_response = handle_server_actions(response_text)
+    clean_response = processor.process(response_text)
     
     return jsonify({
         "original_response": response_text,
         "clean_response": clean_response
     })
-
-def handle_server_actions(response):
-    """
-    Executes actions on the HOST machine (the PC running this server).
-    """
-    import re
-    
-    # We re-use the logic from main.py but adapted for the API response
-    # In a full refactor, this logic should move into modules/actions.py as a static processor
-    
-    if "[STATS]" in response:
-        stats = hands.get_system_stats()
-        response = response.replace("[STATS]", "") + f" {stats}"
-    
-    if "[TIME]" in response:
-        time_str = hands.get_time()
-        response = response.replace("[TIME]", "") + f" {time_str}"
-        
-    if "[DATE]" in response:
-        date_str = hands.get_date()
-        response = response.replace("[DATE]", "") + f" {date_str}"
-        
-    if "[MINIMIZE]" in response:
-        hands.minimize_all()
-        response = response.replace("[MINIMIZE]", "")
-        
-    if "[SCREENSHOT]" in response:
-        result = hands.take_screenshot()
-        response = response.replace("[SCREENSHOT]", "") + f" {result}"
-        
-    match = re.search(r"\[OPEN:\s*(.*?)\]", response)
-    if match:
-        hands.open_app(match.group(1))
-        response = response.replace(match.group(0), "")
-        
-    match = re.search(r"\[SEARCH:\s*(.*?)\]", response)
-    if match:
-        hands.search_web(match.group(1))
-        response = response.replace(match.group(0), "")
-        
-    match = re.search(r"\[PLAY:\s*(.*?)\]", response)
-    if match:
-        hands.play_youtube(match.group(1))
-        response = response.replace(match.group(0), "")
-        
-    match = re.search(r"\[VOLUME:\s*(.*?)\]", response)
-    if match:
-        hands.adjust_volume(match.group(1))
-        response = response.replace(match.group(0), "")
-        
-    return response.strip()
 
 if __name__ == '__main__':
     # Run on 0.0.0.0 to be accessible on the local network
