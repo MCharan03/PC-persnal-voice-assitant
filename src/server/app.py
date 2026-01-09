@@ -54,41 +54,40 @@ def voice_command():
         if audio_file.filename == '':
             return jsonify({"error": "No selected file"}), 400
 
-        try:
-            import time
-            start_time = time.time()
+        import time
+        start_time = time.time()
+        
+        # Read file into memory (No Disk I/O)
+        audio_data = BytesIO(audio_file.read())
+        
+        # 1. Transcribe (Server-side STT)
+        t0 = time.time()
+        # Faster-Whisper can read directly from the BytesIO object
+        user_text = ears.transcribe(audio_data)
+        t1 = time.time()
+        print(f"[Timing] STT took: {t1 - t0:.2f}s")
+        print(f"[API] Transcribed: {user_text}")
+        
+        if not user_text:
+            return jsonify({"error": "Could not understand audio"}), 400
             
-            # Read file into memory (No Disk I/O)
-            audio_data = BytesIO(audio_file.read())
-            
-            # 1. Transcribe (Server-side STT)
-            t0 = time.time()
-            # Faster-Whisper can read directly from the BytesIO object
-            user_text = ears.transcribe(audio_data)
-            t1 = time.time()
-            print(f"[Timing] STT took: {t1 - t0:.2f}s")
-            print(f"[API] Transcribed: {user_text}")
-            
-            if not user_text:
-                return jsonify({"error": "Could not understand audio"}), 400
-                
-            # 2. Ask Brain
-            t2 = time.time()
-            response_text = brain.chat(user_text)
-            t3 = time.time()
-            print(f"[Timing] LLM took: {t3 - t2:.2f}s")
-            
-            # 3. Execute Actions
-            clean_response = hands.parse_and_execute(response_text)
-            
-            total_time = time.time() - start_time
-            print(f"[Timing] TOTAL Request time: {total_time:.2f}s")
-            
-            return jsonify({
-                "transcription": user_text,
-                "response": clean_response,
-                "original_response": response_text
-            })
+        # 2. Ask Brain
+        t2 = time.time()
+        response_text = brain.chat(user_text)
+        t3 = time.time()
+        print(f"[Timing] LLM took: {t3 - t2:.2f}s")
+        
+        # 3. Execute Actions
+        clean_response = hands.parse_and_execute(response_text)
+        
+        total_time = time.time() - start_time
+        print(f"[Timing] TOTAL Request time: {total_time:.2f}s")
+        
+        return jsonify({
+            "transcription": user_text,
+            "response": clean_response,
+            "original_response": response_text
+        })
                 
     except Exception as e:
         print("!!! SERVER ERROR !!!")
@@ -133,4 +132,4 @@ def handle_disconnect():
 
 if __name__ == '__main__':
     # Run using SocketIO
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True, ssl_context='adhoc')
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
