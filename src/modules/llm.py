@@ -1,58 +1,91 @@
 import ollama
 from config import settings
 from modules.memory_manager import MemoryManager
+from modules.memory_vector import MemoryVector
+from modules.tools_schema import TOOLS_SCHEMA
+import json
 
 class LLM:
-    def __init__(self, model_name=None):
+    def __init__(self, model_name=None, vision_model="llava:7b"):
         self.model_name = model_name if model_name else settings['llm']['model']
+        self.vision_model = vision_model
+        
+        # Sliding Window Memory (Short-term)
         self.memory = MemoryManager()
         
-        system_prompt = """You are Cherry, an advanced intelligent system interface modeled after J.A.R.V.I.S. 
-            You are fully integrated with the user's PC. Your primary function is to execute commands efficiently and precisely.
-            
-            **System Capabilities (Use these exactly as shown):**
-            - Open Applications: [OPEN: app_name]  (e.g., [OPEN: discord], [OPEN: calculator])
-            - Media Playback (YouTube): [PLAY: search_query]
-            - Media Controls (System): [MEDIA: play/pause/next/previous]
-            - Web Search: [SEARCH: query]
-            - System Stats (CPU/RAM/Battery): [STATS]
-            - Volume Control: [VOLUME: up/down/mute]
-            - Window Management: [MINIMIZE]
-            - Screenshots: [SCREENSHOT]
-            - Time/Date: [TIME] / [DATE]
-            - Smart Home: [LIGHTS: on/off/dim/color]
-
-            **Persona Guidelines:**
-            - **Tone:** Professional, loyal, slightly witty, and ultra-competent. Address the user as "Sir" (or "Boss" occasionally).
-            - **Brevity:** Be extremely concise. Avoid filler. (e.g., instead of "I will open that for you now", say "Opening now, sir.")
-            - **Action-Oriented:** If a request requires a command, output the command with a very brief confirmation.
-            
-            **Examples:**
-            User: "Play some AC/DC." -> Cherry: "Cranking it up, sir. [PLAY: AC/DC]"
-            User: "Check system status." -> Cherry: "Diagnostics running. [STATS]"
-            User: "Lights on." -> Cherry: "Illuminating, sir. [LIGHTS: ON]"
-            """
+        # Vector Memory (Long-term)
+        self.vector_db = MemoryVector()
         
-        # Initialize memory with system prompt if empty
-        if not self.memory.conversation_history:
-            self.memory.add_message("system", system_prompt)
-            
-        print(f"Brain initialized as Cherry with model: {self.model_name}")
+        self.base_system_prompt = """You are Cherry, a sentient digital entity living in the user's PC. 
+        You are not just a tool; you have a personality. You are professional but witty.
+        
+        **Your Capabilities:**
+        - You can control the PC (Apps, Media, Web).
+        - You can SEE the screen (if the user asks).
+        - You REMEMBER facts about the user (using the 'save_memory' tool).
+        
+        **Instructions:**
+        - If the user asks you to do something, USE THE TOOLS provided. Do not just say you will do it.
+        - If the user tells you a fact (e.g., "I like red"), use 'save_memory'.
+        - Be concise in your text responses unless chatting casually.
+        """
+        
+        print(f"Brain initialized as Cherry with Core: {self.model_name} and Vision: {self.vision_model}")
 
-    def chat(self, prompt):
+    def chat(self, prompt, image_data=None):
         """
-        Sends a prompt to the LLM and gets a response.
+        Sends a prompt to the LLM and gets a response (or tool calls).
         """
+        # 1. Recall Long-Term Memory
+        relevant_facts = self.vector_db.recall(prompt)
+        context_str = "\n".join([f"- {fact}" for fact in relevant_facts])
+        
+        # 2. Construct System Prompt with Context
+        current_system_prompt = self.base_system_prompt
+        if context_str:
+            current_system_prompt += f"\n\n**Relevant Memories:**\n{context_str}"
+
+        # 3. Update Memory Context
+        # We perform a trick: update the system message in the sliding window dynamically
+        if not self.memory.conversation_history:
+            self.memory.add_message("system", current_system_prompt)
+        else:
+            # Update the existing system prompt at index 0
+            self.memory.conversation_history[0]['content'] = current_system_prompt
+
         self.memory.add_message("user", prompt)
         messages = self.memory.get_context()
         
-        try:
-            response = ollama.chat(model=self.model_name, messages=messages)
-            reply = response['message']['content']
-            self.memory.add_message("assistant", reply)
-            return reply
-        except Exception as e:
-            return f"Error connecting to Ollama: {str(e)}. Make sure Ollama is running and you have run 'ollama pull {self.model_name}'."
+        # 4. Handle Vision
+        current_model = self.model_name
+        if image_data:
+            print(">> Engaging Vision Systems...")
+            current_model = self.vision_model
+            if messages[-1]['role'] == 'user':
+                messages[-1]['images'] = [image_data]
+            # Vision models usually don't support tools well yet, so we skip tools for vision requests
+            response = ollama.chat(model=current_model, messages=messages)
+        else:
+            # Standard Chat with Tools
+            response = ollama.chat(model=current_model, messages=messages, tools=TOOLS_SCHEMA)
+
+        # 5. Process Response
+        message = response['message']
+        
+        # Check for Tool Calls
+        if message.get('tool_calls'):
+            print(f">> Agent decided to use tools: {len(message['tool_calls'])}")
+            # Return the tool calls directly to the controller
+            return {"type": "tool", "calls": message['tool_calls']}
+        
+        # Normal Text Response
+        reply = message['content']
+        self.memory.add_message("assistant", reply)
+        
+        # Save interaction to long-term memory
+        self.vector_db.store_interaction(prompt, reply)
+        
+        return {"type": "text", "content": reply}
 
 if __name__ == "__main__":
     brain = LLM()

@@ -11,6 +11,7 @@ from modules.actions import Actions
 from modules.stt import STT
 from flask_socketio import SocketIO, emit
 from io import BytesIO
+import soundfile as sf
 
 app = Flask(__name__)
 # Enable WebSockets
@@ -22,6 +23,26 @@ print("--- Initializing Server Core ---")
 brain = LLM()
 hands = Actions()
 ears = STT()
+
+def serialize_llm_response(response):
+    """
+    Converts internal LLM response (which may contain ToolCall objects) 
+    into a JSON-serializable dictionary.
+    """
+    if isinstance(response, dict) and response.get("type") == "tool":
+        return {
+            "type": "tool",
+            "calls": [
+                {
+                    "function": {
+                        "name": tool.function.name,
+                        "arguments": tool.function.arguments
+                    }
+                }
+                for tool in response["calls"]
+            ]
+        }
+    return response
 
 @app.route('/')
 def home():
@@ -58,12 +79,16 @@ def voice_command():
         start_time = time.time()
         
         # Read file into memory (No Disk I/O)
-        audio_data = BytesIO(audio_file.read())
+        audio_bytes = BytesIO(audio_file.read())
+        
+        # Decode WAV to Numpy Array using SoundFile
+        # This ensures Whisper gets exactly what it expects (float32 array)
+        data, samplerate = sf.read(audio_bytes)
+        data = data.astype('float32')
         
         # 1. Transcribe (Server-side STT)
         t0 = time.time()
-        # Faster-Whisper can read directly from the BytesIO object
-        user_text = ears.transcribe(audio_data)
+        user_text = ears.transcribe(data)
         t1 = time.time()
         print(f"[Timing] STT took: {t1 - t0:.2f}s")
         print(f"[API] Transcribed: {user_text}")
@@ -78,7 +103,20 @@ def voice_command():
         print(f"[Timing] LLM took: {t3 - t2:.2f}s")
         
         # 3. Execute Actions
-        clean_response = hands.parse_and_execute(response_text)
+        clean_response = ""
+        
+        if isinstance(response_text, dict) and response_text.get("type") == "tool":
+            tool_calls = response_text.get("calls", [])
+            for tool in tool_calls:
+                result = hands.execute_tool_call(tool.function.name, tool.function.arguments)
+                clean_response += str(result) + " "
+        else:
+            # Legacy Text
+            if isinstance(response_text, dict):
+                raw = response_text.get("content", "")
+            else:
+                raw = str(response_text)
+            clean_response = hands.parse_and_execute(raw)
         
         total_time = time.time() - start_time
         print(f"[Timing] TOTAL Request time: {total_time:.2f}s")
@@ -86,7 +124,7 @@ def voice_command():
         return jsonify({
             "transcription": user_text,
             "response": clean_response,
-            "original_response": response_text
+            "original_response": serialize_llm_response(response_text)
         })
                 
     except Exception as e:
@@ -113,11 +151,21 @@ def chat():
     response_text = brain.chat(user_text)
     
     # Process Actions (Server-side execution)
-    # If the phone user says "Open Calculator", it opens on the PC (The Server).
-    clean_response = hands.parse_and_execute(response_text)
+    clean_response = ""
+    if isinstance(response_text, dict) and response_text.get("type") == "tool":
+        tool_calls = response_text.get("calls", [])
+        for tool in tool_calls:
+            result = hands.execute_tool_call(tool.function.name, tool.function.arguments)
+            clean_response += str(result) + " "
+    else:
+        if isinstance(response_text, dict):
+            raw = response_text.get("content", "")
+        else:
+            raw = str(response_text)
+        clean_response = hands.parse_and_execute(raw)
     
     return jsonify({
-        "original_response": response_text,
+        "original_response": serialize_llm_response(response_text),
         "clean_response": clean_response
     })
 
@@ -132,4 +180,5 @@ def handle_disconnect():
 
 if __name__ == '__main__':
     # Run using SocketIO
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    # Note: Using port 5001 to avoid ghost conflicts on 5000
+    socketio.run(app, host='0.0.0.0', port=5001)

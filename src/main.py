@@ -21,6 +21,8 @@ from modules.tts import TTS
 from modules.wake_word import WakeWord
 from modules.vad import VAD
 from modules.actions import Actions
+from modules.vision import Vision
+from modules.pulse import PulseWorker
 from config import settings
 from gui import ModernHUD
 
@@ -33,11 +35,19 @@ class CherryWorker(QThread):
         super().__init__()
         self.running = True
         self.actions = Actions()
+        self.vision = Vision()
+        self.pulse = PulseWorker()
         self.audio_queue = queue.Queue()
         
     def run(self):
         print("--- Initializing Cherry Core ---")
         self.sig_state.emit("IDLE")
+        
+        # Connect Pulse Signal directly to TTS
+        # Note: We need a wrapper to also update GUI state if possible
+        self.pulse.sig_proactive_speech.connect(self.handle_proactive_speech)
+        self.pulse.start()
+
         self.sig_text.emit("System Initializing...", "Loading Modules...")
         
         # Audio Settings
@@ -148,7 +158,15 @@ class CherryWorker(QThread):
                 
                 self.sig_state.emit("IDLE") 
 
+    def handle_proactive_speech(self, text):
+        self.sig_state.emit("SPEAKING")
+        self.sig_text.emit("System Alert", text)
+        self.tts.speak(text)
+        # Return to IDLE after a delay? TTS handles speaking, but GUI might get stuck.
+        # Ideally, TTS should emit a 'finished' signal. For now, this is okay.
+
     def process_command(self, audio_data):
+        self.pulse.reset_idle_timer() # Reset idle timer on activity
         text = self.stt.transcribe(audio_data)
         if not text or len(text) < 2:
             print("No speech recognized.")
@@ -156,12 +174,51 @@ class CherryWorker(QThread):
             return
 
         print(f"User: {text}")
-        response = self.llm.chat(text)
-        clean_response = self.actions.parse_and_execute(response)
         
-        self.sig_text.emit(text, clean_response)
-        self.sig_state.emit("SPEAKING")
-        self.tts.speak(clean_response)
+        # Check for visual intent
+        image_data = None
+        vision_triggers = ["see", "look", "screen", "what is this", "read this", "describe"]
+        if any(trigger in text.lower() for trigger in vision_triggers):
+            print("[Vision] Trigger detected. Capturing screen...")
+            image_data = self.vision.capture_screen()
+            self.sig_text.emit(text, "Analyzing screen...")
+
+        response = self.llm.chat(text, image_data=image_data)
+        
+        # Handle Agent Tool Calls
+        if isinstance(response, dict) and response.get("type") == "tool":
+            tool_calls = response.get("calls", [])
+            final_output = ""
+            
+            for tool in tool_calls:
+                func_name = tool.function.name
+                args = tool.function.arguments
+                
+                # Execute Tool
+                result = self.actions.execute_tool_call(func_name, args)
+                
+                # Generate a natural language confirmation
+                # In a full agent loop, we would feed this 'result' back to the LLM
+                # For now, we just speak the result.
+                final_output += str(result) + " "
+                
+            self.sig_text.emit(text, final_output)
+            self.sig_state.emit("SPEAKING")
+            self.tts.speak(final_output)
+            
+        else:
+            # Fallback for Text / Regex
+            # response is a dict with type="text" or a raw string (legacy)
+            if isinstance(response, dict):
+                response_text = response.get("content", "")
+            else:
+                response_text = str(response)
+                
+            clean_response = self.actions.parse_and_execute(response_text)
+            
+            self.sig_text.emit(text, clean_response)
+            self.sig_state.emit("SPEAKING")
+            self.tts.speak(clean_response)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

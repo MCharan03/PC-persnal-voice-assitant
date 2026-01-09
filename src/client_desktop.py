@@ -16,7 +16,7 @@ from modules.vad import VAD
 from modules.tts import TTS
 from gui import ModernHUD
 
-SERVER_URL = "https://localhost:5000"
+SERVER_URL = "http://localhost:5001"
 
 class CherryClient(QThread):
     # Updated Signals for ModernHUD
@@ -27,9 +27,6 @@ class CherryClient(QThread):
         super().__init__()
         self.running = True
         self.audio_queue = queue.Queue()
-        # Suppress insecure request warnings for self-signed cert
-        import urllib3
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         
     def run(self):
         print("--- Initializing Cherry Client ---")
@@ -53,7 +50,7 @@ class CherryClient(QThread):
         for i in range(1, 16): # Try 15 times (30 seconds)
             try:
                 self.sig_text.emit("System Initializing...", f"Connecting... ({i}/15)")
-                requests.get(f"{SERVER_URL}/api/status", verify=False, timeout=2)
+                requests.get(f"{SERVER_URL}/api/status", timeout=2)
                 print("Brain is Online.")
                 self.sig_text.emit("System Online", "Ready. Say 'Jarvis'")
                 connected = True
@@ -148,7 +145,7 @@ class CherryClient(QThread):
         try:
             print("Sending audio to Brain...")
             files = {'audio': ('command.wav', mem_file, 'audio/wav')}
-            response = requests.post(f"{SERVER_URL}/api/voice", files=files, verify=False)
+            response = requests.post(f"{SERVER_URL}/api/voice", files=files)
             
             if response.status_code == 200:
                 data = response.json()
@@ -161,8 +158,12 @@ class CherryClient(QThread):
                 self.sig_state.emit("SPEAKING")
                 
                 self.tts.speak(reply)
+            elif response.status_code == 400:
+                print(f"Server (400): {response.text}")
+                self.sig_text.emit("...", "I didn't catch that.")
+                self.tts.speak("I didn't catch that.")
             else:
-                print(f"Server Error: {response.text}")
+                print(f"Server Error ({response.status_code}): {response.text}")
                 self.sig_text.emit("Error", "Server Error")
                 self.tts.speak("I'm having trouble connecting to my brain.")
                 

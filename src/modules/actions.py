@@ -7,6 +7,7 @@ import datetime
 import re
 import time
 from pytubefix import Search
+from modules.memory_vector import MemoryVector
 
 class Actions:
     def __init__(self):
@@ -14,10 +15,38 @@ class Actions:
         self.screenshot_dir = os.path.join(os.getcwd(), "screenshots")
         if not os.path.exists(self.screenshot_dir):
             os.makedirs(self.screenshot_dir)
+        
+        # Initialize memory for the 'save_memory' tool
+        self.memory = MemoryVector()
+
+    def execute_tool_call(self, tool_name, args):
+        """
+        Executes a function call decided by the LLM.
+        """
+        print(f"[Agent] Executing Tool: {tool_name} with args: {args}")
+        
+        try:
+            if tool_name == "open_app":
+                return self.open_app(args.get("app_name"))
+            elif tool_name == "search_web":
+                return self.search_web(args.get("query"))
+            elif tool_name == "play_youtube":
+                return self.play_youtube(args.get("query"))
+            elif tool_name == "control_media":
+                return self.control_media(args.get("command"))
+            elif tool_name == "get_system_stats":
+                return self.get_system_stats()
+            elif tool_name == "save_memory":
+                self.memory.remember_fact(args.get("fact"))
+                return f"I've saved that to my long-term memory: {args.get('fact')}"
+            else:
+                return f"Error: Unknown tool '{tool_name}'"
+        except Exception as e:
+            return f"Error executing {tool_name}: {str(e)}"
 
     def parse_and_execute(self, text):
         """
-        Parses the LLM response, executes actions, and returns clean text.
+        Legacy/Fallback: Parses the LLM response, executes actions, and returns clean text.
         """
         if "[STATS]" in text:
             stats = self.get_system_stats()
