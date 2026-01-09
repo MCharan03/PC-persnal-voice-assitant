@@ -34,7 +34,8 @@ class STT:
             audio_data: Can be a file path (str), a binary file-like object (BytesIO), 
                         or a numpy array (np.ndarray).
         """
-        segments, info = self.model.transcribe(audio_data, beam_size=5)
+        # Reduced beam_size from 5 to 1 for speed
+        segments, info = self.model.transcribe(audio_data, beam_size=1)
         text = " ".join([segment.text for segment in segments]).strip()
         return text
 

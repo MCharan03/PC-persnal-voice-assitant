@@ -4,6 +4,7 @@ import webbrowser
 import psutil
 import pyautogui
 import datetime
+import re
 from pytubefix import Search
 
 class Actions:
@@ -12,6 +13,62 @@ class Actions:
         self.screenshot_dir = os.path.join(os.getcwd(), "screenshots")
         if not os.path.exists(self.screenshot_dir):
             os.makedirs(self.screenshot_dir)
+
+    def parse_and_execute(self, text):
+        """
+        Parses the LLM response, executes actions, and returns clean text.
+        """
+        if "[STATS]" in text:
+            stats = self.get_system_stats()
+            text = text.replace("[STATS]", "") + f" {stats}"
+        
+        if "[TIME]" in text:
+            text = text.replace("[TIME]", "") + f" {self.get_time()}"
+
+        if "[DATE]" in text:
+            text = text.replace("[DATE]", "") + f" {self.get_date()}"
+            
+        if "[MINIMIZE]" in text:
+            self.minimize_all()
+            text = text.replace("[MINIMIZE]", "")
+            
+        if "[SCREENSHOT]" in text:
+            result = self.take_screenshot()
+            text = text.replace("[SCREENSHOT]", "") + f" {result}"
+
+        # Regex Actions
+        match = re.search(r"\[OPEN:\s*(.*?)\]", text)
+        if match:
+            self.open_app(match.group(1))
+            text = text.replace(match.group(0), "")
+            
+        match = re.search(r"\[SEARCH:\s*(.*?)\]", text)
+        if match:
+            self.search_web(match.group(1))
+            text = text.replace(match.group(0), "")
+            
+        match = re.search(r"\[PLAY:\s*(.*?)\]", text)
+        if match:
+            self.play_youtube(match.group(1))
+            text = text.replace(match.group(0), "")
+
+        match = re.search(r"\[VOLUME:\s*(.*?)\]", text)
+        if match:
+            self.adjust_volume(match.group(1))
+            text = text.replace(match.group(0), "")
+
+        match = re.search(r"\[MEDIA:\s*(.*?)\]", text)
+        if match:
+            self.control_media(match.group(1))
+            text = text.replace(match.group(0), "")
+
+        match = re.search(r"\[LIGHTS:\s*(.*?)\]", text)
+        if match:
+            # TODO: Integrate with Phillips Hue / Home Assistant
+            print(f"[Smart Home] Executing Light Command: {match.group(1)}")
+            text = text.replace(match.group(0), "")
+            
+        return text.strip()
 
     def open_app(self, app_name):
         """Attempts to open a common application."""

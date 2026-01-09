@@ -3,7 +3,7 @@ system:
   target_rate: 16000
 
 vad:
-  threshold: 0.0005
+  threshold: 0.02
 
 wake_word:
   keyword: "hey jarvis"

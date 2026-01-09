@@ -20,7 +20,7 @@ from modules.llm import LLM
 from modules.tts import TTS
 from modules.wake_word import WakeWord
 from modules.vad import VAD
-from modules.command_processor import CommandProcessor
+from modules.actions import Actions
 from config import settings
 from gui import ModernHUD
 
@@ -32,7 +32,7 @@ class CherryWorker(QThread):
     def __init__(self):
         super().__init__()
         self.running = True
-        self.processor = CommandProcessor()
+        self.actions = Actions()
         self.audio_queue = queue.Queue()
         
     def run(self):
@@ -157,7 +157,7 @@ class CherryWorker(QThread):
 
         print(f"User: {text}")
         response = self.llm.chat(text)
-        clean_response = self.processor.process(response)
+        clean_response = self.actions.parse_and_execute(response)
         
         self.sig_text.emit(text, clean_response)
         self.sig_state.emit("SPEAKING")

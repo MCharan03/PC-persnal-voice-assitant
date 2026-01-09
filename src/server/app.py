@@ -9,7 +9,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from modules.llm import LLM
 from modules.actions import Actions
 from modules.stt import STT
-from modules.command_processor import CommandProcessor
 from flask_socketio import SocketIO, emit
 from io import BytesIO
 
@@ -23,7 +22,6 @@ print("--- Initializing Server Core ---")
 brain = LLM()
 hands = Actions()
 ears = STT()
-processor = CommandProcessor(hands)
 
 @app.route('/')
 def home():
@@ -81,7 +79,7 @@ def voice_command():
             print(f"[Timing] LLM took: {t3 - t2:.2f}s")
             
             # 3. Execute Actions
-            clean_response = processor.process(response_text)
+            clean_response = hands.parse_and_execute(response_text)
             
             total_time = time.time() - start_time
             print(f"[Timing] TOTAL Request time: {total_time:.2f}s")
@@ -117,7 +115,7 @@ def chat():
     
     # Process Actions (Server-side execution)
     # If the phone user says "Open Calculator", it opens on the PC (The Server).
-    clean_response = processor.process(response_text)
+    clean_response = hands.parse_and_execute(response_text)
     
     return jsonify({
         "original_response": response_text,
