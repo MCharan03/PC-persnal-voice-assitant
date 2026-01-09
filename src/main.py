@@ -39,28 +39,45 @@ class CherryWorker(QThread):
         self.sig_text.emit("System Initializing...", "Loading Modules...")
         
         # Audio Settings
-        self.sample_rate = 16000
-        self.chunk_size = 1024 
+        self.native_rate = 48000 # Native rate for WASAPI
+        self.target_rate = 16000 # Rate for AI (Whisper)
+        self.downsample_factor = int(self.native_rate / self.target_rate)
+        self.chunk_size = 1024 * self.downsample_factor # Read 3x samples to get 1024 after downsampling
         
         # Modules
-        self.wake_word = WakeWord(keyword="hi")
+        self.wake_word = WakeWord(keyword="hey jarvis")
         self.stt = STT()
         self.llm = LLM()
         self.tts = TTS()
-        self.vad = VAD(threshold=0.02)
+        self.vad = VAD(threshold=0.0005) # Increased sensitivity
         
         self.is_listening = False
         self.audio_buffer = []
-        self.wake_buffer = [] 
+        # self.wake_buffer = [] # No longer needed for openWakeWord
         
-        print("--- Cherry is Ready. Say 'Hi' ---")
-        self.sig_text.emit("System Online", "Ready. Say 'Hi'")
+        print("--- Cherry is Ready. Say 'Hey Jarvis' or 'Alexa' ---")
+        self.sig_text.emit("System Online", "Ready. Say 'Hey Jarvis'")
         
-        # Open audio stream
-        device_info = sd.query_devices(kind='input')
-        print(f"Using Input Device: {device_info['name']}")
+        # Find WASAPI Microphone
+        devices = sd.query_devices()
+        input_device_id = None
+        for i, d in enumerate(devices):
+            if 'WASAPI' in sd.query_hostapis(d['hostapi'])['name'] and d['max_input_channels'] > 0:
+                # Prefer Microphone Array if multiple
+                if 'Microphone' in d['name']:
+                    input_device_id = i
+                    break
+        
+        if input_device_id is None:
+            # Fallback to default
+            input_device_id = sd.default.device[0]
+            print("WASAPI Mic not found, using default.")
+        
+        device_info = devices[input_device_id]
+        print(f"Using Input Device: {device_info['name']} (ID: {input_device_id}) @ {self.native_rate}Hz")
 
-        with sd.InputStream(samplerate=self.sample_rate, 
+        with sd.InputStream(device=input_device_id,
+                            samplerate=self.native_rate, 
                             blocksize=self.chunk_size, 
                             channels=1, 
                             callback=self.audio_callback):
@@ -75,13 +92,17 @@ class CherryWorker(QThread):
     def audio_callback(self, indata, frames, time, status):
         if status:
             print(status, file=sys.stderr)
+        
+        # Simple downsampling (decimation)
+        # e.g., if factor is 3, take every 3rd sample [0, 3, 6...]
+        downsampled = indata[::self.downsample_factor]
+        
         # Push to queue to avoid blocking the audio thread
-        self.audio_queue.put(indata.copy().squeeze())
+        self.audio_queue.put(downsampled.copy().squeeze())
 
     def process_audio(self, audio_data):
         # Prevent hearing itself
         if self.tts.is_busy():
-            self.wake_buffer = []
             self.audio_buffer = []
             return
 
@@ -89,28 +110,22 @@ class CherryWorker(QThread):
         rms = np.sqrt(np.mean(audio_data**2))
         if np.random.rand() < 0.1: # Print more frequently (10%)
             # Boost visualization sensitivity and show raw value
-            bar_len = int(rms * 1000) 
-            print(f"\rMic Level: {'|' * bar_len:<20} (RMS: {rms:.4f})", end='', flush=True)
+            bar_len = int(rms * 50000) 
+            print(f"\rMic Level: {'|' * bar_len:<20} (RMS: {rms:.6f})", end='', flush=True)
 
         if not self.is_listening:
-            # IDLE: Check for "Cherry"
-            self.wake_buffer.append(audio_data)
-            # Buffer ~1.5 seconds
-            if len(self.wake_buffer) > 24:
-                self.wake_buffer.pop(0)
+            # IDLE: Feed every chunk to OpenWakeWord
+            # OpenWakeWord expects ~80ms chunks (1280 samples @ 16k)
+            # Our chunks are ~1024 samples. This is close enough for streaming.
+            
+            if self.wake_word.detect(audio_data):
+                print("\n[!] Wake Word Detected!")
+                self.is_listening = True
+                self.audio_buffer = [] 
                 
-                # Check every 0.5s (8 chunks)
-                if len(self.wake_buffer) % 8 == 0:
-                    combined_audio = np.concatenate(self.wake_buffer)
-                    if self.wake_word.detect(combined_audio):
-                        print("\n[!] Cherry detected!")
-                        self.is_listening = True
-                        self.audio_buffer = [] 
-                        self.wake_buffer = []
-                        
-                        self.sig_state.emit("LISTENING")
-                        self.sig_text.emit("Listening...", "")
-                        self.tts.speak("Yes?")
+                self.sig_state.emit("LISTENING")
+                self.sig_text.emit("Listening...", "")
+                self.tts.play_listening_cue() # Instant beep
         else:
             # ACTIVE: Listen until silence
             self.audio_buffer.append(audio_data)
@@ -175,6 +190,10 @@ class CherryWorker(QThread):
         match = re.search(r"\[VOLUME:\s*(.*?)\]", response)
         if match:
             self.actions.adjust_volume(match.group(1))
+            response = response.replace(match.group(0), "")
+        match = re.search(r"\[MEDIA:\s*(.*?)\]", response)
+        if match:
+            self.actions.control_media(match.group(1))
             response = response.replace(match.group(0), "")
         return response.strip()
 

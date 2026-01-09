@@ -1,49 +1,46 @@
-import torch
 import os
-
-# We no longer need the CUDA injection here as we are forcing CPU for wake word
-from faster_whisper import WhisperModel
 import numpy as np
+from openwakeword.model import Model
 
 class WakeWord:
-    def __init__(self, keyword="cherry"):
-        print(f"Initializing Wake Word Engine (CPU Optimized) for: '{keyword}'...")
-        self.keyword = keyword.lower()
+    def __init__(self, keyword="hey jarvis"):
+        print(f"Initializing Wake Word Engine (OpenWakeWord) for: '{keyword}'...")
+        self.keyword = keyword
         
-        # Optimization: Run Wake Word on CPU to save GPU VRAM for the LLM & Main STT
-        # 'tiny.en' is extremely fast on CPU (int8)
-        device = "cpu" 
-        compute_type = "int8"
-        
-        try:
-            self.model = WhisperModel("tiny.en", device=device, compute_type=compute_type)
-            print(f"Wake Word Monitor running on {device.upper()} (lightweight).")
-        except Exception as e:
-            print(f"Error initializing Wake Word: {e}")
-            self.model = None
+        # Load pre-trained models
+        # We can load multiple models at once
+        # Explicitly use 'onnx' inference framework since tflite-runtime is not available on Python 3.13
+        self.model = Model(
+            wakeword_models=["hey_jarvis", "alexa"],
+            inference_framework="onnx"
+        )
+        print("Wake Word Monitor running on CPU (OpenWakeWord Optimized).")
 
     def detect(self, audio_data):
         """
-        Transcribes a small chunk of audio and checks if 'Hi' is in it.
+        Feeds audio data to OpenWakeWord and returns True if a wake word is detected.
+        Expects audio_data to be a numpy array of int16 or float32.
         """
         if not self.model: return False
         
-        # Variations allowed (Jarvis is more distinct than Hi)
-        triggers = ["jarvis", "service", "jervis"]
-        
         try:
-            segments, _ = self.model.transcribe(audio_data, beam_size=1)
-            for segment in segments:
-                text = segment.text.lower().strip()
-                # Remove punctuation
-                import string
-                text = text.translate(str.maketrans('', '', string.punctuation))
-                
-                print(f"Heard: '{text}'") # Debug enabled
-                
-                # Check for exact match of short words to avoid false positives inside other words
-                words = text.split()
-                if any(word in triggers for word in words):
+            # OpenWakeWord expects 16-bit PCM (int16) scaled -32768 to 32767
+            # Our audio is float32 (-1.0 to 1.0). Convert it.
+            if audio_data.dtype == np.float32:
+                audio_int16 = (audio_data * 32767).astype(np.int16)
+            else:
+                audio_int16 = audio_data
+
+            # Feed the model (it handles its own buffering internally)
+            prediction = self.model.predict(audio_int16)
+            
+            # Check results
+            for mdl in self.model.prediction_buffer.keys():
+                # Get the score for the last chunk
+                scores = list(self.model.prediction_buffer[mdl])
+                if scores and scores[-1] > 0.5: # Threshold 0.5
+                    print(f"Wake Word Detected: {mdl} (Score: {scores[-1]:.2f})")
+                    self.model.reset() # Reset internal state
                     return True
                     
         except Exception as e:
