@@ -1,10 +1,12 @@
 import sys
-import requests
-import sounddevice as sd
-import numpy as np
+import os
+import io
 import queue
 import time
-import os
+import numpy as np
+import sounddevice as sd
+import soundfile as sf
+import socketio
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -19,7 +21,6 @@ from gui import ModernHUD
 SERVER_URL = "http://localhost:5001"
 
 class CherryClient(QThread):
-    # Updated Signals for ModernHUD
     sig_state = pyqtSignal(str) # "IDLE", "LISTENING", "THINKING", "SPEAKING"
     sig_text = pyqtSignal(str, str) # user_text, ai_text
     
@@ -28,41 +29,63 @@ class CherryClient(QThread):
         self.running = True
         self.audio_queue = queue.Queue()
         
+        # SocketIO Client
+        self.sio = socketio.Client()
+        self.setup_socket_events()
+
+    def setup_socket_events(self):
+        @self.sio.event
+        def connect():
+            print("[Socket] Connected to Brain!")
+            self.sig_text.emit("System Online", "Ready. Say 'Jarvis'")
+            
+        @self.sio.event
+        def disconnect():
+            print("[Socket] Disconnected from Brain!")
+            self.sig_text.emit("Connection Lost", "Brain offline.")
+            
+        @self.sio.event
+        def transcription(data):
+            text = data.get('text', '')
+            self.sig_text.emit(text, "...")
+            
+        @self.sio.event
+        def response(data):
+            text = data.get('text', '')
+            print(f"Brain: {text}")
+            self.sig_text.emit("...", text)
+            self.sig_state.emit("SPEAKING")
+            self.tts.speak(text)
+            self.sig_state.emit("IDLE")
+
     def run(self):
         print("--- Initializing Cherry Client ---")
         
-        # Local "Reflexes" (Wake Word & VAD need to be local for zero latency)
         self.wake_word = WakeWord(keyword="jarvis")
         self.vad = VAD(threshold=0.02)
-        
-        # Local Voice Output
         self.tts = TTS()
         
         self.is_listening = False
         self.audio_buffer = []
         self.wake_buffer = []
         
-        print(f"Connecting to Brain at {SERVER_URL}...")
         self.sig_state.emit("IDLE")
         
-        # Retry Loop for Server Connection
+        # Connect to Server
         connected = False
-        for i in range(1, 16): # Try 15 times (30 seconds)
+        for i in range(1, 16):
             try:
                 self.sig_text.emit("System Initializing...", f"Connecting... ({i}/15)")
-                requests.get(f"{SERVER_URL}/api/status", timeout=2)
-                print("Brain is Online.")
-                self.sig_text.emit("System Online", "Ready. Say 'Jarvis'")
+                self.sio.connect(SERVER_URL)
                 connected = True
                 break
             except Exception as e:
-                print(f"Waiting for Brain... ({i}/15) - {e}")
+                print(f"Connection Failed: {e}")
                 time.sleep(2)
-        
+                
         if not connected:
-            print(f"WARNING: Brain (Server) appears offline after multiple attempts.")
             self.sig_text.emit("Connection Failed", "Brain is offline.")
-            self.tts.speak("I cannot connect to my brain. Please check the server.")
+            self.tts.speak("I cannot connect to my brain.")
 
         device_info = sd.query_devices(kind='input')
         print(f"Using Input Device: {device_info['name']}")
@@ -87,15 +110,11 @@ class CherryClient(QThread):
             self.audio_buffer = []
             return
 
-        # Calculate volume level
-        rms = np.sqrt(np.mean(audio_data**2))
-        
-        # DEBUG: Print volume level every 10th chunk to verify mic is working
-        if np.random.rand() < 0.1:
-            print(f"Mic Level: {rms:.4f}")
+        # Simple volume check
+        # rms = np.sqrt(np.mean(audio_data**2))
 
         if not self.is_listening:
-            # Wake Word Detection (Local)
+            # Wake Word Detection
             self.wake_buffer.append(audio_data)
             if len(self.wake_buffer) > 24: self.wake_buffer.pop(0)
             
@@ -111,73 +130,44 @@ class CherryClient(QThread):
                     self.sig_text.emit("Listening...", "")
                     self.tts.speak("Yes?")
         else:
-            # VAD / Recording
+            # VAD
             self.audio_buffer.append(audio_data)
             status = self.vad.process_chunk(audio_data)
+            
             if status == 1: # Silence detected
                 self.is_listening = False
                 self.sig_state.emit("THINKING")
                 
-                # Send to Server
+                # Send to Server via Socket
                 full_audio = np.concatenate(self.audio_buffer)
                 self.send_to_brain(full_audio)
                 
-                # CRITICAL FIX: Flush the audio queue to remove 'stale' audio 
-                # recorded while the AI was thinking/speaking.
+                # Clear queue
                 with self.audio_queue.mutex:
                     self.audio_queue.queue.clear()
-                
-                print("--- Cycle Complete. Listening for 'Jarvis' ---")
-                self.sig_state.emit("IDLE")
 
     def send_to_brain(self, audio_data):
         """
-        Sends raw audio data to the server for processing.
+        Sends raw audio data to the server via SocketIO.
         """
-        import soundfile as sf
-        import io
-        
-        # Convert numpy array to WAV in memory
-        mem_file = io.BytesIO()
-        sf.write(mem_file, audio_data, 16000, format='WAV')
-        mem_file.seek(0)
-        
         try:
-            print("Sending audio to Brain...")
-            files = {'audio': ('command.wav', mem_file, 'audio/wav')}
-            response = requests.post(f"{SERVER_URL}/api/voice", files=files)
+            # Convert numpy array to WAV in memory
+            mem_file = io.BytesIO()
+            sf.write(mem_file, audio_data, 16000, format='WAV')
+            wav_bytes = mem_file.getvalue()
             
-            if response.status_code == 200:
-                data = response.json()
-                reply = data.get('response', '')
-                transcription = data.get('transcription', '(Unknown)')
-                
-                print(f"Brain: {reply}")
-                
-                self.sig_text.emit(transcription, reply)
-                self.sig_state.emit("SPEAKING")
-                
-                self.tts.speak(reply)
-            elif response.status_code == 400:
-                print(f"Server (400): {response.text}")
-                self.sig_text.emit("...", "I didn't catch that.")
-                self.tts.speak("I didn't catch that.")
-            else:
-                print(f"Server Error ({response.status_code}): {response.text}")
-                self.sig_text.emit("Error", "Server Error")
-                self.tts.speak("I'm having trouble connecting to my brain.")
-                
+            self.sio.emit('audio_input', {'audio': wav_bytes})
+            print(">> Sent audio to Brain")
+            
         except Exception as e:
-            print(f"Network Error: {e}")
+            print(f"Socket Error: {e}")
             self.sig_text.emit("Network Error", str(e))
-            self.tts.speak("Network error.")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     hud = ModernHUD()
     client = CherryClient()
     
-    # Connect signals
     client.sig_state.connect(hud.set_state)
     client.sig_text.connect(hud.set_text)
     
