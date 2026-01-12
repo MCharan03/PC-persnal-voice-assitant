@@ -6,6 +6,7 @@ from langchain.tools import tool
 from duckduckgo_search import DDGS
 from modules.memory_vector import MemoryVector
 from modules.bridge import server_bridge
+from modules.learning import learner
 
 # Custom Search Wrapper
 class CustomSearchTool:
@@ -100,33 +101,31 @@ def see_screen(query: str = "Describe what is on the screen.") -> str:
     Use this when the user says "Look at this", "What's on my screen?", or asks for visual help.
     """
     print(">> [Tool] see_screen called.")
-    
-    # 1. Get Screenshot from Client via Bridge
     image_data = server_bridge.request_screenshot()
-    
     if not image_data:
         return "Error: Could not capture screen (Client might be disconnected or timed out)."
     
     print(">> [Tool] Screenshot received. Analyzing with Vision Model...")
-    
     try:
-        # 2. Send to Multimodal Model (Llava)
-        # Note: 'image_data' should be bytes
         response = ollama.chat(
             model='llava',
-            messages=[
-                {
-                    'role': 'user',
-                    'content': query,
-                    'images': [image_data]
-                }
-            ]
+            messages=[{'role': 'user', 'content': query, 'images': [image_data]}]
         )
-        
-        description = response['message']['content']
-        return f"Vision Analysis: {description}"
-        
+        return f"Vision Analysis: {response['message']['content']}"
     except Exception as e:
         return f"Vision Error: {str(e)}"
 
-CHERRY_TOOLS = [search_web, get_current_time, read_local_file, execute_system_command, save_memory, recall_memory, see_screen]
+@tool
+def learn_new_behavior(instruction: str) -> str:
+    """
+    Teaches the AI a new rule or correction for future interactions.
+    Use this when the user says "Don't do X", "Always do Y", or corrects you.
+    Example Input: "When I ask for code, always include comments."
+    """
+    try:
+        learner.add_rule(trigger_context=instruction, rule_instruction=instruction)
+        return f"I have learned a new rule: {instruction}"
+    except Exception as e:
+        return f"Learning Error: {str(e)}"
+
+CHERRY_TOOLS = [search_web, get_current_time, read_local_file, execute_system_command, save_memory, recall_memory, see_screen, learn_new_behavior]
