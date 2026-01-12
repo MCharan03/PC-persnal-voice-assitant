@@ -1,24 +1,40 @@
 import os
 import subprocess
 import datetime
-from langchain_community.tools import DuckDuckGoSearchRun
+import ollama
 from langchain.tools import tool
+from duckduckgo_search import DDGS
 from modules.memory_vector import MemoryVector
+from modules.bridge import server_bridge
+
+# Custom Search Wrapper
+class CustomSearchTool:
+    def __init__(self):
+        self.ddgs = DDGS()
+        
+    def run(self, query):
+        try:
+            results = self.ddgs.text(query, max_results=3)
+            if not results:
+                return "No results found."
+            summary = ""
+            for r in results:
+                summary += f"- {r['title']}: {r['body']}\n"
+            return summary
+        except Exception as e:
+            return f"Search Error: {str(e)}"
 
 # Initialize Search Tool
-search = DuckDuckGoSearchRun()
+search_tool = CustomSearchTool()
 
 # Initialize Memory
-# Note: Path is relative to project root usually
-memory_vector = MemoryVector(db_path=os.path.join(os.getcwd(), "data", "memory_db"))
+db_path = os.path.join(os.getcwd(), "data", "memory_db")
+memory_vector = MemoryVector(db_path=db_path)
 
 @tool
 def search_web(query: str) -> str:
     """Useful for searching the internet for current events or facts."""
-    try:
-        return search.run(query)
-    except Exception as e:
-        return f"Error searching web: {str(e)}"
+    return search_tool.run(query)
 
 @tool
 def get_current_time(query: str = "") -> str:
@@ -56,8 +72,7 @@ def execute_system_command(command: str) -> str:
 def save_memory(fact: str) -> str:
     """
     Saves a specific fact to long-term memory. 
-    Use this when the user explicitly asks to remember something, 
-    or shares a personal preference/detail.
+    Use this when the user explicitly asks to remember something.
     """
     try:
         memory_vector.remember_fact(fact)
@@ -68,8 +83,7 @@ def save_memory(fact: str) -> str:
 @tool
 def recall_memory(query: str) -> str:
     """
-    Searches long-term memory for relevant facts or past conversations.
-    Useful when the user refers to past context or asks "Do you remember...?"
+    Searches long-term memory for relevant facts.
     """
     try:
         results = memory_vector.recall(query)
@@ -79,5 +93,40 @@ def recall_memory(query: str) -> str:
     except Exception as e:
         return f"Error recalling memory: {str(e)}"
 
-# Export list of tools
-CHERRY_TOOLS = [search_web, get_current_time, read_local_file, execute_system_command, save_memory, recall_memory]
+@tool
+def see_screen(query: str = "Describe what is on the screen.") -> str:
+    """
+    Captures the user's screen and analyzes it. 
+    Use this when the user says "Look at this", "What's on my screen?", or asks for visual help.
+    """
+    print(">> [Tool] see_screen called.")
+    
+    # 1. Get Screenshot from Client via Bridge
+    image_data = server_bridge.request_screenshot()
+    
+    if not image_data:
+        return "Error: Could not capture screen (Client might be disconnected or timed out)."
+    
+    print(">> [Tool] Screenshot received. Analyzing with Vision Model...")
+    
+    try:
+        # 2. Send to Multimodal Model (Llava)
+        # Note: 'image_data' should be bytes
+        response = ollama.chat(
+            model='llava',
+            messages=[
+                {
+                    'role': 'user',
+                    'content': query,
+                    'images': [image_data]
+                }
+            ]
+        )
+        
+        description = response['message']['content']
+        return f"Vision Analysis: {description}"
+        
+    except Exception as e:
+        return f"Vision Error: {str(e)}"
+
+CHERRY_TOOLS = [search_web, get_current_time, read_local_file, execute_system_command, save_memory, recall_memory, see_screen]

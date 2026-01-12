@@ -16,6 +16,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from modules.wake_word import WakeWord
 from modules.vad import VAD
 from modules.tts import TTS
+from modules.vision import Vision
 from gui import ModernHUD
 
 SERVER_URL = "http://localhost:5001"
@@ -28,6 +29,9 @@ class CherryClient(QThread):
         super().__init__()
         self.running = True
         self.audio_queue = queue.Queue()
+        
+        # Modules
+        self.vision = Vision()
         
         # SocketIO Client
         self.sio = socketio.Client()
@@ -57,6 +61,21 @@ class CherryClient(QThread):
             self.sig_state.emit("SPEAKING")
             self.tts.speak(text)
             self.sig_state.emit("IDLE")
+
+        @self.sio.event
+        def request_screenshot():
+            print(">> [Socket] Brain requested screenshot.")
+            self.sig_text.emit("...", "Analyzing screen...")
+            
+            # Capture
+            img_b64 = self.vision.capture_screen()
+            
+            if img_b64:
+                print(f">> Sending screenshot ({len(img_b64)} bytes)...")
+                self.sio.emit('screenshot_upload', {'image': img_b64})
+            else:
+                print(">> Screenshot failed.")
+                self.sio.emit('screenshot_upload', {'image': None})
 
     def run(self):
         print("--- Initializing Cherry Client ---")
@@ -110,9 +129,6 @@ class CherryClient(QThread):
             self.audio_buffer = []
             return
 
-        # Simple volume check
-        # rms = np.sqrt(np.mean(audio_data**2))
-
         if not self.is_listening:
             # Wake Word Detection
             self.wake_buffer.append(audio_data)
@@ -157,7 +173,7 @@ class CherryClient(QThread):
             wav_bytes = mem_file.getvalue()
             
             self.sio.emit('audio_input', {'audio': wav_bytes})
-            print(">> Sent audio to Brain")
+            # print(">> Sent audio to Brain")
             
         except Exception as e:
             print(f"Socket Error: {e}")
