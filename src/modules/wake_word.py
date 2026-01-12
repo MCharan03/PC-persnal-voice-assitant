@@ -1,5 +1,6 @@
 import os
 import numpy as np
+import openwakeword
 from openwakeword.model import Model
 
 class WakeWord:
@@ -7,14 +8,24 @@ class WakeWord:
         print(f"Initializing Wake Word Engine (OpenWakeWord) for: '{keyword}'...")
         self.keyword = keyword
         
+        # Ensure models are present
+        try:
+            openwakeword.utils.download_models()
+        except Exception as e:
+            print(f"Warning: Could not auto-download models: {e}")
+
         # Load pre-trained models
         # We can load multiple models at once
         # Explicitly use 'onnx' inference framework since tflite-runtime is not available on Python 3.13
-        self.model = Model(
-            wakeword_models=["hey_jarvis", "alexa"],
-            inference_framework="onnx"
-        )
-        print("Wake Word Monitor running on CPU (OpenWakeWord Optimized).")
+        try:
+            self.model = Model(
+                wakeword_models=["hey_jarvis", "alexa"],
+                inference_framework="onnx"
+            )
+            print("Wake Word Monitor running on CPU (OpenWakeWord Optimized).")
+        except Exception as e:
+            print(f"CRITICAL ERROR initializing Wake Word: {e}")
+            self.model = None
 
     def detect(self, audio_data):
         """

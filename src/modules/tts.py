@@ -12,7 +12,8 @@ class TTS:
     _queue = queue.Queue()
     _worker_thread = None
     _is_busy = False 
-    _cue_audio = None # Pre-generated buffer
+    _cue_audio = None 
+    _stop_flag = False # Flag to interrupt playback
 
     def __new__(cls):
         if cls._instance is None:
@@ -26,19 +27,29 @@ class TTS:
         return cls._is_busy
 
     @classmethod
+    def stop(cls):
+        """Stops current playback and clears the queue."""
+        cls._stop_flag = True
+        try:
+            # Clear queue
+            with cls._queue.mutex:
+                cls._queue.queue.clear()
+            # Stop sounddevice immediately
+            sd.stop()
+            print(">> TTS Interrupted.")
+        except Exception as e:
+            print(f"Error stopping TTS: {e}")
+
+    @classmethod
     def _generate_cue(cls):
-        """Pre-generates the 'ding' sound."""
         try:
             fs = 44100
             duration = 0.2
             t = np.linspace(0, duration, int(fs * duration), endpoint=False)
-            
-            # Generate a pleasant "ding"
             frequency = 880 
             audio = 0.3 * np.sin(2 * np.pi * frequency * t)
             audio += 0.3 * np.sin(2 * np.pi * (frequency * 2) * t) 
             audio *= np.exp(-10 * t) 
-            
             cls._cue_audio = audio.astype(np.float32)
         except Exception as e:
             print(f"Error generating cue: {e}")
@@ -52,9 +63,6 @@ class TTS:
 
     @classmethod
     def _run_worker(cls):
-        """
-        Runs in a dedicated thread. Initializes Kokoro-ONNX locally.
-        """
         model_path = settings['tts']['model_path']
         voices_path = settings['tts']['voices_path']
         
@@ -64,7 +72,6 @@ class TTS:
 
         try:
             kokoro = Kokoro(model_path, voices_path)
-            # Default voice
             voice_name = settings['tts']['voice_name']
             print(f"Kokoro TTS initialized with voice: {voice_name}")
         except Exception as e:
@@ -77,13 +84,21 @@ class TTS:
                 if text is None: break 
                 
                 cls._is_busy = True 
+                cls._stop_flag = False
                 
-                # Generate audio with Kokoro
+                # Generate audio
                 samples, sample_rate = kokoro.create(text, voice=voice_name, speed=1.0, lang="en-us")
                 
-                # Play audio
-                sd.play(samples, sample_rate)
-                sd.wait() # Wait for playback to finish
+                if not cls._stop_flag:
+                    sd.play(samples, sample_rate)
+                    # Custom wait loop to allow interruption
+                    duration = len(samples) / sample_rate
+                    start_time = time.time()
+                    while time.time() - start_time < duration:
+                        if cls._stop_flag:
+                            sd.stop()
+                            break
+                        time.sleep(0.1)
                 
                 cls._is_busy = False 
                 cls._queue.task_done()
@@ -92,24 +107,12 @@ class TTS:
                 print(f"TTS Error: {e}")
 
     def speak(self, text):
-        """
-        Queues the text to be spoken. Non-blocking.
-        """
         print(f"Cherry: {text}")
         self._queue.put(text)
 
     def play_listening_cue(self):
-        """
-        Plays the pre-generated 'ding' sound instantly.
-        """
         if self._cue_audio is not None:
             try:
                 sd.play(self._cue_audio, 44100)
             except Exception as e:
                 print(f"Error playing cue: {e}")
-
-if __name__ == "__main__":
-    voice = TTS()
-    voice.speak("System online.")
-    voice.speak("All systems nominal.")
-    time.sleep(5)

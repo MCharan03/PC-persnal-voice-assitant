@@ -128,4 +128,6 @@ def learn_new_behavior(instruction: str) -> str:
     except Exception as e:
         return f"Learning Error: {str(e)}"
 
-CHERRY_TOOLS = [search_web, get_current_time, read_local_file, execute_system_command, save_memory, recall_memory, see_screen, learn_new_behavior]
+from modules.web_scraper import scrape_website
+
+CHERRY_TOOLS = [search_web, get_current_time, read_local_file, execute_system_command, save_memory, recall_memory, see_screen, learn_new_behavior, scrape_website]
