@@ -7,6 +7,15 @@ import sounddevice as sd
 from kokoro_onnx import Kokoro
 from config import settings
 
+import threading
+import queue
+import time
+import os
+import numpy as np
+import sounddevice as sd
+from kokoro_onnx import Kokoro
+from config import settings
+
 class TTS:
     _instance = None
     _queue = queue.Queue()
@@ -14,13 +23,31 @@ class TTS:
     _is_busy = False 
     _cue_audio = None 
     _stop_flag = False # Flag to interrupt playback
+    _current_voice = None
+    _current_speed = 1.0
+    _completion_callback = None
 
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(TTS, cls).__new__(cls)
+            cls._current_voice = settings['tts']['voice_name']
             cls._start_worker()
             cls._generate_cue()
         return cls._instance
+
+    @classmethod
+    def set_callback(cls, func):
+        """Sets a function to be called when TTS finishes speaking."""
+        cls._completion_callback = func
+
+    @classmethod
+    def set_voice(cls, voice_name):
+        cls._current_voice = voice_name
+        print(f">> TTS Voice changed to: {voice_name}")
+
+    @classmethod
+    def set_speed(cls, speed):
+        cls._current_speed = speed
 
     @classmethod
     def is_busy(cls):
@@ -72,8 +99,7 @@ class TTS:
 
         try:
             kokoro = Kokoro(model_path, voices_path)
-            voice_name = settings['tts']['voice_name']
-            print(f"Kokoro TTS initialized with voice: {voice_name}")
+            print(f"Kokoro TTS initialized.")
         except Exception as e:
             print(f"Failed to initialize Kokoro: {e}")
             return
@@ -86,8 +112,13 @@ class TTS:
                 cls._is_busy = True 
                 cls._stop_flag = False
                 
-                # Generate audio
-                samples, sample_rate = kokoro.create(text, voice=voice_name, speed=1.0, lang="en-us")
+                # Generate audio using dynamic voice and speed
+                samples, sample_rate = kokoro.create(
+                    text, 
+                    voice=cls._current_voice, 
+                    speed=cls._current_speed, 
+                    lang="en-us"
+                )
                 
                 if not cls._stop_flag:
                     sd.play(samples, sample_rate)
@@ -102,13 +133,30 @@ class TTS:
                 
                 cls._is_busy = False 
                 cls._queue.task_done()
+                
+                # Trigger Callback if empty
+                if cls._queue.empty() and cls._completion_callback and not cls._stop_flag:
+                    try:
+                        cls._completion_callback()
+                    except Exception as e:
+                        print(f"TTS Callback Error: {e}")
+                        
             except Exception as e:
                 cls._is_busy = False
                 print(f"TTS Error: {e}")
 
-    def speak(self, text):
+    def speak(self, text, voice=None, speed=None):
+        if voice: self.set_voice(voice)
+        if speed: self.set_speed(speed)
         print(f"Cherry: {text}")
         self._queue.put(text)
+
+    def play_listening_cue(self):
+        if self._cue_audio is not None:
+            try:
+                sd.play(self._cue_audio, 44100)
+            except Exception as e:
+                print(f"Error playing cue: {e}")
 
     def play_listening_cue(self):
         if self._cue_audio is not None:

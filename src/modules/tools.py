@@ -2,11 +2,18 @@ import os
 import subprocess
 import datetime
 import ollama
+import pyautogui
+import win32gui
+import win32process
+import psutil
+import webbrowser
 from langchain.tools import tool
 from duckduckgo_search import DDGS
 from modules.memory_vector import MemoryVector
 from modules.bridge import server_bridge
 from modules.learning import learner
+from modules.web_scraper import scrape_website
+from modules.agency import cherry_agency
 
 # Custom Search Wrapper
 class CustomSearchTool:
@@ -20,7 +27,7 @@ class CustomSearchTool:
                 return "No results found."
             summary = ""
             for r in results:
-                summary += f"- {r['title']}: {r['body']}\n"
+                summary += f"- {r['title']} ({r['href']}): {r['body']}\n"
             return summary
         except Exception as e:
             return f"Search Error: {str(e)}"
@@ -38,96 +45,179 @@ def search_web(query: str) -> str:
     return search_tool.run(query)
 
 @tool
+def deep_research(query: str) -> str:
+    """
+    Performs a deep research by searching the web and then reading the content of the top result.
+    Use this for complex questions requiring detailed answers.
+    """
+    try:
+        results = search_tool.ddgs.text(query, max_results=1)
+        if not results: return "Research failed: No results."
+        first_result = results[0]
+        content = scrape_website.invoke(first_result['href'])
+        return f"Research on '{first_result['title']}':\n{content[:2000]}..."
+    except Exception as e:
+        return f"Deep Research Error: {str(e)}"
+
+@tool
+def open_application(app_name: str) -> str:
+    """
+    Finds and opens a desktop application on the user's Windows PC.
+    Use this when the user says "Open Chrome", "Start Spotify", etc.
+    """
+    app_name = app_name.lower()
+    common_apps = {
+        "chrome": r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        "brave": r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+        "spotify": r"C:\Users\{user}\AppData\Roaming\Spotify\Spotify.exe",
+        "discord": r"C:\Users\{user}\AppData\Local\Discord\Update.exe --processStart Discord.exe",
+        "code": "code",
+        "notepad": "notepad.exe",
+        "calculator": "calc.exe"
+    }
+    
+    # Try common apps first
+    user = os.getlogin()
+    if app_name in common_apps:
+        path = common_apps[app_name].replace("{user}", user)
+        try:
+            subprocess.Popen(path, shell=True)
+            return f"Opening {app_name}..."
+        except:
+            pass
+            
+    # Fallback: Use 'start' command which is smarter
+    try:
+        subprocess.run(f"start {app_name}", shell=True, check=True)
+        return f"Invoked 'start' command for {app_name}."
+    except:
+        return f"Failed to open {app_name}. Please check if it's installed or in your PATH."
+
+@tool
+def system_control(action: str, value: str = "") -> str:
+    """
+    Controls system settings like volume, media, or windows.
+    Actions: 'volume_up', 'volume_down', 'mute', 'play_pause', 'next_track', 'minimize_all'.
+    """
+    try:
+        if action == "volume_up":
+            for _ in range(5): pyautogui.press('volumeup')
+            return "Volume increased."
+        elif action == "volume_down":
+            for _ in range(5): pyautogui.press('volumedown')
+            return "Volume decreased."
+        elif action == "mute":
+            pyautogui.press('volumemute')
+            return "Volume muted/unmuted."
+        elif action == "play_pause":
+            pyautogui.press('playpause')
+            return "Toggled media playback."
+        elif action == "next_track":
+            pyautogui.press('nexttrack')
+            return "Skipped to next track."
+        elif action == "minimize_all":
+            pyautogui.hotkey('win', 'd')
+            return "Minimized all windows."
+        return "Unknown system action."
+    except Exception as e:
+        return f"System Control Error: {e}"
+
+@tool
+def set_background_goal(goal_description: str, detailed_instruction: str) -> str:
+    """
+    Spawns a background task for Cherry to work on while the user does other things.
+    """
+    task_id = cherry_agency.add_task(
+        description=goal_description,
+        func=deep_research.invoke,
+        args={"query": detailed_instruction}
+    )
+    return f"I've started working on '{goal_description}' in the background. (Task ID: {task_id})."
+
+@tool
+def check_background_tasks(query: str = "") -> str:
+    """Returns a report of background tasks."""
+    return cherry_agency.get_status_report()
+
+@tool
+def get_active_window_context(query: str = "") -> str:
+    """Returns info about the focused window."""
+    try:
+        hwnd = win32gui.GetForegroundWindow()
+        title = win32gui.GetWindowText(hwnd)
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        process = psutil.Process(pid).name()
+        return f"Active Window: '{title}' (Process: {process})"
+    except Exception as e:
+        return f"Error: {e}"
+
+@tool
+def control_pc_ui(action: str, target: str = "") -> str:
+    """Controls the PC UI (click, type, press)."""
+    try:
+        if action == "type":
+            pyautogui.write(target, interval=0.05)
+            return f"Typed: {target}"
+        elif action == "press":
+            pyautogui.press(target)
+            return f"Pressed key: {target}"
+        elif action == "click":
+            pyautogui.click()
+            return "Clicked."
+        return "Unknown action."
+    except Exception as e:
+        return f"Error: {e}"
+
+@tool
 def get_current_time(query: str = "") -> str:
-    """Returns the current local time and date."""
-    now = datetime.datetime.now()
-    return now.strftime("%A, %B %d, %Y at %I:%M %p")
+    """Returns the current time."""
+    return datetime.datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
 
 @tool
 def read_local_file(file_path: str) -> str:
-    """Reads the content of a local file. Provide the full path."""
+    """Reads a local file."""
     try:
-        if not os.path.exists(file_path):
-            return "File not found."
-        with open(file_path, 'r', encoding='utf-8') as f:
-            return f.read()
-    except Exception as e:
-        return f"Error reading file: {str(e)}"
+        with open(file_path, 'r', encoding='utf-8') as f: return f.read()
+    except Exception as e: return f"Error: {str(e)}"
 
 @tool
 def execute_system_command(command: str) -> str:
-    """
-    Executes a shell command on the user's PC. 
-    Use with caution. Useful for opening apps, installing packages, etc.
-    """
+    """Executes a shell command. Use with extreme caution."""
     try:
         result = subprocess.run(command, shell=True, capture_output=True, text=True)
-        if result.returncode == 0:
-            return f"Command executed. Output: {result.stdout}"
-        else:
-            return f"Command failed. Error: {result.stderr}"
-    except Exception as e:
-        return f"Error executing command: {str(e)}"
+        return f"Out: {result.stdout}\nErr: {result.stderr}"
+    except Exception as e: return f"Error: {str(e)}"
 
 @tool
 def save_memory(fact: str) -> str:
-    """
-    Saves a specific fact to long-term memory. 
-    Use this when the user explicitly asks to remember something.
-    """
-    try:
-        memory_vector.remember_fact(fact)
-        return f"Saved fact: {fact}"
-    except Exception as e:
-        return f"Error saving memory: {str(e)}"
+    """Saves a fact to long-term memory."""
+    memory_vector.remember_fact(fact)
+    return f"Saved: {fact}"
 
 @tool
 def recall_memory(query: str) -> str:
-    """
-    Searches long-term memory for relevant facts.
-    """
-    try:
-        results = memory_vector.recall(query)
-        if results:
-            return f"Found memories:\n" + "\n".join(results)
-        return "No relevant memories found."
-    except Exception as e:
-        return f"Error recalling memory: {str(e)}"
+    """Recalls facts from memory."""
+    results = memory_vector.recall(query)
+    return f"Found:\n" + "\n".join(results) if results else "No memories found."
 
 @tool
-def see_screen(query: str = "Describe what is on the screen.") -> str:
-    """
-    Captures the user's screen and analyzes it. 
-    Use this when the user says "Look at this", "What's on my screen?", or asks for visual help.
-    """
-    print(">> [Tool] see_screen called.")
-    image_data = server_bridge.request_screenshot()
-    if not image_data:
-        return "Error: Could not capture screen (Client might be disconnected or timed out)."
-    
-    print(">> [Tool] Screenshot received. Analyzing with Vision Model...")
+def see_screen(query: str = "Describe the screen.") -> str:
+    """Captures and analyzes the screen."""
     try:
-        response = ollama.chat(
-            model='llava',
-            messages=[{'role': 'user', 'content': query, 'images': [image_data]}]
-        )
-        return f"Vision Analysis: {response['message']['content']}"
-    except Exception as e:
-        return f"Vision Error: {str(e)}"
+        from PIL import ImageGrab
+        import io
+        screenshot = ImageGrab.grab()
+        img_byte_arr = io.BytesIO()
+        screenshot.save(img_byte_arr, format='JPEG', quality=80)
+        image_data = img_byte_arr.getvalue()
+        response = ollama.chat(model='llava', messages=[{'role': 'user', 'content': query, 'images': [image_data]}])
+        return f"Vision: {response['message']['content']}"
+    except Exception as e: return f"Error: {str(e)}"
 
-@tool
-def learn_new_behavior(instruction: str) -> str:
-    """
-    Teaches the AI a new rule or correction for future interactions.
-    Use this when the user says "Don't do X", "Always do Y", or corrects you.
-    Example Input: "When I ask for code, always include comments."
-    """
-    try:
-        learner.add_rule(trigger_context=instruction, rule_instruction=instruction)
-        return f"I have learned a new rule: {instruction}"
-    except Exception as e:
-        return f"Learning Error: {str(e)}"
-
-from modules.web_scraper import scrape_website
-
-CHERRY_TOOLS = [search_web, get_current_time, read_local_file, execute_system_command, save_memory, recall_memory, see_screen, learn_new_behavior, scrape_website]
+CHERRY_TOOLS = [
+    search_web, deep_research, open_application, system_control,
+    set_background_goal, check_background_tasks,
+    get_active_window_context, control_pc_ui, get_current_time, 
+    read_local_file, execute_system_command, save_memory, recall_memory, 
+    see_screen, scrape_website
+]

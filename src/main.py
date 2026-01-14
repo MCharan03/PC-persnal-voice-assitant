@@ -16,13 +16,17 @@ if os.name == 'nt' and torch.cuda.is_available():
         os.add_dll_directory(libs_path)
 
 from modules.stt import STT
-from modules.llm import LLM
+from modules.brain_agent import BrainAgent
 from modules.tts import TTS
 from modules.wake_word import WakeWord
 from modules.vad import VAD
 from modules.actions import Actions
 from modules.vision import Vision
 from modules.pulse import PulseWorker
+from modules.emotion import EmotionEngine
+from modules.vision_buffer import visual_buffer
+from modules.clipboard import ClipboardMonitor
+from modules.agency import cherry_agency
 from config import settings
 from gui import ModernHUD
 
@@ -30,6 +34,9 @@ class CherryWorker(QThread):
     # Signals to update GUI
     sig_state = pyqtSignal(str) # "IDLE", "LISTENING", "THINKING", "SPEAKING"
     sig_text = pyqtSignal(str, str) # user_text, ai_text
+    sig_audio_level = pyqtSignal(float) # Normalized audio level (0.0 - 1.0)
+    sig_task_update = pyqtSignal(int) # Number of active background tasks
+    sig_tts_finished = pyqtSignal() # Internal signal for thread safety
     
     def __init__(self):
         super().__init__()
@@ -37,14 +44,25 @@ class CherryWorker(QThread):
         self.actions = Actions()
         self.vision = Vision()
         self.pulse = PulseWorker()
+        self.emotion = EmotionEngine()
         self.audio_queue = queue.Queue()
+        self.last_proactive_time = 0
+        self.follow_up_active = False
+        self.follow_up_start = 0
+        
+        # Connect internal signal
+        self.sig_tts_finished.connect(self.on_tts_finished)
         
     def run(self):
         print("--- Initializing Cherry Core ---")
         self.sig_state.emit("IDLE")
         
+        # Start Passive Senses
+        visual_buffer.start()
+        self.clipboard = ClipboardMonitor(self.handle_clipboard_change)
+        self.clipboard.start()
+        
         # Connect Pulse Signal directly to TTS
-        # Note: We need a wrapper to also update GUI state if possible
         self.pulse.sig_proactive_speech.connect(self.handle_proactive_speech)
         self.pulse.start()
 
@@ -59,13 +77,13 @@ class CherryWorker(QThread):
         # Modules
         self.wake_word = WakeWord(keyword=settings['wake_word']['keyword'])
         self.stt = STT()
-        self.llm = LLM()
+        self.brain = BrainAgent()
         self.tts = TTS()
+        self.tts.set_callback(self.trigger_tts_finished) # Set callback
         self.vad = VAD(threshold=settings['vad']['threshold'])
         
         self.is_listening = False
         self.audio_buffer = []
-        # self.wake_buffer = [] # No longer needed for openWakeWord
         
         print("--- Cherry is Ready. Say 'Hey Jarvis' or 'Alexa' ---")
         self.sig_text.emit("System Online", "Ready. Say 'Hey Jarvis'")
@@ -75,13 +93,11 @@ class CherryWorker(QThread):
         input_device_id = None
         for i, d in enumerate(devices):
             if 'WASAPI' in sd.query_hostapis(d['hostapi'])['name'] and d['max_input_channels'] > 0:
-                # Prefer Microphone Array if multiple
                 if 'Microphone' in d['name']:
                     input_device_id = i
                     break
         
         if input_device_id is None:
-            # Fallback to default
             input_device_id = sd.default.device[0]
             print("WASAPI Mic not found, using default.")
         
@@ -94,9 +110,19 @@ class CherryWorker(QThread):
                             channels=1, 
                             callback=self.audio_callback):
             while self.running:
-                # Process audio from the queue
+                # Update Agency Status Periodically
+                self.sig_task_update.emit(cherry_agency.task_queue.qsize())
+                
+                # Check Follow-up Timeout (e.g., 8 seconds)
+                if self.follow_up_active:
+                    if time.time() - self.follow_up_start > 8:
+                        self.follow_up_active = False
+                        if not self.is_listening:
+                            print(">> Follow-up timeout. Returning to IDLE.")
+                            self.sig_state.emit("IDLE")
+
                 try:
-                    audio_data = self.audio_queue.get(timeout=1)
+                    audio_data = self.audio_queue.get(timeout=0.1)
                     self.process_audio(audio_data)
                 except queue.Empty:
                     continue
@@ -104,130 +130,171 @@ class CherryWorker(QThread):
     def audio_callback(self, indata, frames, time, status):
         if status:
             print(status, file=sys.stderr)
-        
-        # High-quality resampling using Fourier method
-        # Calculates new length based on ratio
         new_length = int(len(indata) / self.downsample_factor)
         downsampled = scipy.signal.resample(indata, new_length)
-        
-        # Cast to float32 (Whisper expects float32)
         downsampled = downsampled.astype(np.float32)
-        
-        # Push to queue to avoid blocking the audio thread
         self.audio_queue.put(downsampled.squeeze())
 
+    def trigger_tts_finished(self):
+        """Callback from TTS thread. Emit signal to handle in main thread."""
+        self.sig_tts_finished.emit()
+
+    def on_tts_finished(self):
+        """Called when TTS finishes speaking. Enter Follow-up Mode."""
+        print(">> TTS Finished. Entering Follow-up Mode.")
+        self.follow_up_active = True
+        self.follow_up_start = time.time()
+        
+        # Automatically start listening without wake word
+        self.is_listening = True
+        self.audio_buffer = []
+        self.sig_state.emit("LISTENING")
+        # self.tts.play_listening_cue() # Optional: Might be annoying if beep happens every time
+
     def process_audio(self, audio_data):
-        # Prevent hearing itself
-        if self.tts.is_busy():
-            self.audio_buffer = []
-            return
-
-        # Debug: Show volume level periodically (every ~20 chunks) to verify mic
+        # Calculate RMS
         rms = np.sqrt(np.mean(audio_data**2))
-        if np.random.rand() < 0.1: # Print more frequently (10%)
-            # Boost visualization sensitivity and show raw value
-            bar_len = int(rms * 50000) 
-            print(f"\rMic Level: {'|' * bar_len:<20} (RMS: {rms:.6f})", end='', flush=True)
+        self.sig_audio_level.emit(float(rms))
 
-        if not self.is_listening:
-            # IDLE: Feed every chunk to OpenWakeWord
-            # OpenWakeWord expects ~80ms chunks (1280 samples @ 16k)
-            # Our chunks are ~1024 samples. This is close enough for streaming.
-            
+        # --- BARGE-IN LOGIC ---
+        # If TTS is busy, we ONLY listen for Wake Word to interrupt.
+        if self.tts.is_busy():
+            # Risk: Self-triggering if volume is loud.
             if self.wake_word.detect(audio_data):
+                print("\n[!] Barge-In Detected! Stopping TTS.")
+                self.tts.stop()
+                self.is_listening = True
+                self.audio_buffer = [] 
+                self.sig_state.emit("LISTENING")
+                self.tts.play_listening_cue()
+            return # Skip normal VAD/processing while speaking
+
+        # --- NORMAL LISTENING LOGIC ---
+        if not self.is_listening:
+            # Check for Wake Word OR Follow-up Speech
+            wake_detected = self.wake_word.detect(audio_data)
+            
+            # If in Follow-up mode, check for just speech energy (VAD-ish) or Wake Word
+            if self.follow_up_active:
+                # Simple energy threshold for start of speech in follow-up
+                # This is a crude VAD. Ideally, we use the VAD module.
+                if wake_detected or (rms > 0.02): # Threshold for "User is speaking"
+                    print("\n[!] Follow-up Speech Detected!")
+                    self.is_listening = True
+                    self.audio_buffer = [] 
+                    self.sig_state.emit("LISTENING")
+                    self.follow_up_active = False # Reset follow-up
+            
+            elif wake_detected:
                 print("\n[!] Wake Word Detected!")
                 self.is_listening = True
                 self.audio_buffer = [] 
-                
                 self.sig_state.emit("LISTENING")
                 self.sig_text.emit("Listening...", "")
-                self.tts.play_listening_cue() # Instant beep
+                self.tts.play_listening_cue()
         else:
-            # ACTIVE: Listen until silence
+            # We are actively recording
             self.audio_buffer.append(audio_data)
             vad_status = self.vad.process_chunk(audio_data)
             
-            if vad_status == 1: # Speech ended
+            if vad_status == 1: # Silence detected (End of Phrase)
                 print("\n[!] Silence detected. Processing...")
                 self.is_listening = False
                 self.sig_state.emit("THINKING")
                 
-                # Capture full audio
                 full_audio = np.concatenate(self.audio_buffer)
                 self.process_command(full_audio)
-                
-                self.sig_state.emit("IDLE") 
+                # Note: We do NOT emit "IDLE" here. 
+                # We wait for TTS to finish, which triggers on_tts_finished -> LISTENING again.
 
     def handle_proactive_speech(self, text):
+        now = time.time()
+        if now - self.last_proactive_time < 30: 
+            return
+        self.last_proactive_time = now
         self.sig_state.emit("SPEAKING")
-        self.sig_text.emit("System Alert", text)
+        self.sig_text.emit("Cherry Proactive", text)
         self.tts.speak(text)
-        # Return to IDLE after a delay? TTS handles speaking, but GUI might get stuck.
-        # Ideally, TTS should emit a 'finished' signal. For now, this is okay.
+
+    def handle_clipboard_change(self, content):
+        if content.startswith("http"):
+            msg = f"Sir, I noticed you copied a link. Would you like me to research it for you?"
+            self.handle_proactive_speech(msg)
 
     def process_command(self, audio_data):
-        self.pulse.reset_idle_timer() # Reset idle timer on activity
+        self.pulse.reset_idle_timer()
         text = self.stt.transcribe(audio_data)
         if not text or len(text) < 2:
-            print("No speech recognized.")
             self.sig_text.emit("...", "I didn't catch that.")
+            # If we didn't catch it, go back to follow-up listening?
+            # Or just IDLE. Let's trigger follow-up to give them a second chance.
+            self.on_tts_finished() 
             return
 
         print(f"User: {text}")
         
-        # Check for visual intent
+        # --- COMMAND INTERCEPTION ---
+        # Handle "Sleep" / "Stop Listening" locally to force IDLE state
+        sleep_triggers = ["go to sleep", "go to idle", "stop listening", "go mute", "sleep mode"]
+        if any(trigger in text.lower() for trigger in sleep_triggers):
+            print(">> [Command] Sleep Triggered.")
+            self.sig_text.emit(text, "Going to sleep.")
+            self.sig_state.emit("IDLE")
+            self.follow_up_active = False # Cancel follow-up
+            self.tts.speak("Going to sleep. Wake me if you need me.", voice="af_heart") # Neutral voice
+            return
+
+        # Handle "Shutdown" / "Exit"
+        shutdown_triggers = ["shutdown yourself", "shutdown yourselves", "exit program", "terminate system", "self destruct"]
+        if any(trigger in text.lower() for trigger in shutdown_triggers):
+            print(">> [Command] Shutdown Triggered.")
+            self.sig_text.emit(text, "Shutting down systems. Goodbye, Sir.")
+            self.sig_state.emit("IDLE")
+            self.tts.speak("Shutting down all neural links. Goodbye, Sir.", voice="af_heart")
+            # Wait a moment for TTS to start/queue before killing process
+            time.sleep(3)
+            QApplication.instance().quit()
+            return
+
+        # 1. EMOTION
+        mood = self.emotion.analyze(text, audio_data=audio_data)
+        mood_directive = self.emotion.get_system_directive(mood)
+        voice_settings = self.emotion.get_voice_settings(mood)
+        
+        self.brain.update_mood(mood_directive)
+
+        # 2. VISION
         image_data = None
         vision_triggers = ["see", "look", "screen", "what is this", "read this", "describe"]
         if any(trigger in text.lower() for trigger in vision_triggers):
-            print("[Vision] Trigger detected. Capturing screen...")
             image_data = self.vision.capture_screen()
             self.sig_text.emit(text, "Analyzing screen...")
 
-        response = self.llm.chat(text, image_data=image_data)
+        # 3. BRAIN
+        response = self.brain.chat(text, image_data=image_data)
         
-        # Handle Agent Tool Calls
-        if isinstance(response, dict) and response.get("type") == "tool":
-            tool_calls = response.get("calls", [])
-            final_output = ""
-            
-            for tool in tool_calls:
-                func_name = tool.function.name
-                args = tool.function.arguments
-                
-                # Execute Tool
-                result = self.actions.execute_tool_call(func_name, args)
-                
-                # Generate a natural language confirmation
-                # In a full agent loop, we would feed this 'result' back to the LLM
-                # For now, we just speak the result.
-                final_output += str(result) + " "
-                
-            self.sig_text.emit(text, final_output)
-            self.sig_state.emit("SPEAKING")
-            self.tts.speak(final_output)
-            
-        else:
-            # Fallback for Text / Regex
-            # response is a dict with type="text" or a raw string (legacy)
-            if isinstance(response, dict):
-                response_text = response.get("content", "")
-            else:
-                response_text = str(response)
-                
-            clean_response = self.actions.parse_and_execute(response_text)
-            
-            self.sig_text.emit(text, clean_response)
-            self.sig_state.emit("SPEAKING")
-            self.tts.speak(clean_response)
+        # 4. SPEAK
+        self.sig_text.emit(text, response)
+        self.sig_state.emit("SPEAKING")
+        
+        self.tts.speak(
+            response, 
+            voice=voice_settings['voice'], 
+            speed=voice_settings['speed']
+        )
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     hud = ModernHUD()
     worker = CherryWorker()
     
+    # Connect all signals
     worker.sig_state.connect(hud.set_state)
     worker.sig_text.connect(hud.set_text)
+    worker.sig_audio_level.connect(hud.update_audio_level)
+    worker.sig_task_update.connect(hud.update_task_count)
     
     hud.show()
     worker.start()
     sys.exit(app.exec())
+

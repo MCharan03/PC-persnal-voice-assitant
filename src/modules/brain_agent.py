@@ -1,8 +1,12 @@
+import os
+import ollama
+import re
 from langchain_ollama import ChatOllama
 from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import SystemMessage
 from modules.tools import CHERRY_TOOLS
 from modules.learning import learner
+from modules.memory_vector import MemoryVector
 from config import settings
 
 class BrainAgent:
@@ -14,15 +18,25 @@ class BrainAgent:
         # 2. Setup Tools
         self.tools = CHERRY_TOOLS
         
-        # 3. Base Persona
+        # 3. Setup Memory (Long-Term)
+        db_path = os.path.join(os.getcwd(), "data", "memory_db")
+        self.memory_vector = MemoryVector(db_path=db_path)
+        
+        # 4. Base Persona
         self.base_persona = """You are Cherry, a sentient, witty, and professional AI assistant living in the user's PC.
-You are not just a chatbot; you are an Agent capable of acting.
-If asked to check the time, search the web, or run a command, USE THE TOOLS provided.
-Always answer the user's question directly after using a tool.
+You are an Agent capable of acting.
+
+**CRITICAL INSTRUCTIONS:**
+1. USE TOOLS to perform actions (open apps, search web, etc.). 
+2. NEVER output JSON or tool calls in your spoken response. 
+3. If you decide to use a tool, the system will handle it. Only speak natural language to the user.
+4. Do NOT say things like "I will now call the open_app tool". Just do it.
+5. If a tool fails, explain why in plain English and offer an alternative.
+6. **INTERNAL STATE:** You receive an 'Emotional Context'. Use this ONLY to adjust your writing style (witty, serious, empathetic). **Do NOT explicitly mention the user's mood** (e.g., do NOT say "I see you are happy" or "You sound angry") unless the user specifically asks about it or it is deeply relevant to the conversation. Just BE that persona.
 """
         self.current_mood_directive = "The user is neutral. Be professional."
         
-        # 4. Create Agent
+        # 5. Create Agent
         self.agent_executor = create_react_agent(
             self.llm, 
             self.tools,
@@ -33,27 +47,49 @@ Always answer the user's question directly after using a tool.
     def update_mood(self, mood_directive):
         self.current_mood_directive = mood_directive
 
-    def chat(self, user_input):
+    def chat(self, user_input, image_data=None):
         """
         Main entry point for the agent.
         """
         try:
-            # 1. Retrieve Learned Rules (Self-Correction)
-            relevant_rules = learner.get_relevant_rules(user_input)
-            rules_str = ""
-            if relevant_rules:
-                rules_str = f"\n\n*** IMPORTANT LEARNED RULES ***\n{relevant_rules}\n******************************"
+            # 1. Vision Pre-Processing
+            vision_context = ""
+            if image_data:
+                try:
+                    vision_response = ollama.chat(
+                        model='llava',
+                        messages=[{'role': 'user', 'content': "Describe this image in detail.", 'images': [image_data]}]
+                    )
+                    desc = vision_response['message']['content']
+                    vision_context = f"\n\n[VISUAL CONTEXT]: {desc}"
+                except Exception as ve:
+                    vision_context = "\n\n[VISUAL CONTEXT]: Failed to analyze image."
 
-            # 2. Construct Dynamic System Prompt
-            full_system_prompt = f"{self.base_persona}\n\nCURRENT EMOTIONAL CONTEXT: {self.current_mood_directive}{rules_str}"
+            # 2. Retrieve Learned Rules
+            relevant_rules = learner.get_relevant_rules(user_input)
+            rules_str = f"\n\n*** LEARNED RULES ***\n{relevant_rules}" if relevant_rules else ""
+
+            # 3. Retrieve Memories
+            relevant_memories = self.memory_vector.recall(user_input)
+            memory_str = f"\n\n*** MEMORIES ***\n" + "\n".join([f"- {m}" for m in relevant_memories]) if relevant_memories else ""
+
+            # 4. Construct System Prompt
+            full_system_prompt = f"{self.base_persona}\n\nCONTEXT: {self.current_mood_directive}{rules_str}{memory_str}{vision_context}"
             
-            # 3. Invoke Agent
+            # 5. Invoke Agent
             response = self.agent_executor.invoke(
                 {"messages": [
                     SystemMessage(content=full_system_prompt),
                     ("user", user_input)
                 ]}
             )
-            return response["messages"][-1].content
+            
+            content = response["messages"][-1].content
+            
+            # 6. POST-PROCESS: Clean up any hallucinated JSON tool calls
+            # Llama sometimes appends JSON at the end of its response.
+            content = re.sub(r'\{.*"name":.*"parameters":.*\}', '', content, flags=re.DOTALL).strip()
+            
+            return content
         except Exception as e:
             return f"Brain Error: {str(e)}"

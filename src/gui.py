@@ -4,7 +4,7 @@ import random
 import psutil
 import time
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel
-from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF, QSize
+from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF, QSize, pyqtSlot
 from PyQt6.QtGui import QColor, QPainter, QBrush, QPen, QRadialGradient, QFont, QPainterPath, QConicalGradient
 
 class ModernHUD(QWidget):
@@ -31,6 +31,8 @@ class ModernHUD(QWidget):
         self.state = "IDLE" 
         self.user_text = ""
         self.ai_text = "Cherry Online"
+        self.audio_level = 0.0
+        self.active_tasks = 0
         self.cpu_percent = 0
         self.ram_percent = 0
         
@@ -40,7 +42,6 @@ class ModernHUD(QWidget):
         self.angle_3 = 0
         self.pulse = 0
         self.pulse_dir = 1
-        self.glow_intensity = 0
         
         # Timers
         self.anim_timer = QTimer()
@@ -50,6 +51,15 @@ class ModernHUD(QWidget):
         self.stats_timer = QTimer()
         self.stats_timer.timeout.connect(self.update_stats)
         self.stats_timer.start(2000)
+
+    @pyqtSlot(float)
+    def update_audio_level(self, level):
+        # Smooth out the level (simple lerp could be better but this works)
+        self.audio_level = level * 10 # Scale up for visual impact
+
+    @pyqtSlot(int)
+    def update_task_count(self, count):
+        self.active_tasks = count
 
     def update_stats(self):
         self.cpu_percent = psutil.cpu_percent()
@@ -74,10 +84,10 @@ class ModernHUD(QWidget):
         
         # Pulse Logic
         if self.state in ["LISTENING", "SPEAKING"]:
-            p_speed = 0.05 if self.state == "LISTENING" else 0.08
-            self.pulse += p_speed * self.pulse_dir
-            if self.pulse > 1 or self.pulse < 0:
-                self.pulse_dir *= -1
+            # Use real audio level if available, else sine wave
+            target_pulse = min(1.0, max(0.2, self.audio_level))
+            # Smooth interpolation
+            self.pulse = self.pulse * 0.8 + target_pulse * 0.2
         else:
             self.pulse = math.sin(time.time() * 2) * 0.5 + 0.5
             
@@ -115,7 +125,7 @@ class ModernHUD(QWidget):
         self.draw_tech_ring(painter, cx, cy, 140, self.angle_3, base_cyan, 1)
         
         # 3. The Core Orb
-        core_radius = 60 + (5 * self.pulse)
+        core_radius = 60 + (30 * self.pulse) # More reactive to audio
         core_grad = QRadialGradient(cx - 10, cy - 10, core_radius)
         core_grad.setColorAt(0, QColor(255, 255, 255, 255))
         core_grad.setColorAt(0.2, base_cyan)
@@ -126,6 +136,12 @@ class ModernHUD(QWidget):
         
         # 4. Floating Text
         self.draw_floating_text(painter)
+        
+        # 5. Agency Status (Mini Indicator)
+        if self.active_tasks > 0:
+            painter.setFont(QFont("Segoe UI", 8))
+            painter.setPen(QColor(0, 255, 0))
+            painter.drawText(QRectF(cx - 50, cy + 140, 100, 20), Qt.AlignmentFlag.AlignCenter, f"Bg Tasks: {self.active_tasks}")
 
     def draw_tech_ring(self, painter, cx, cy, radius, angle, color, width):
         pen = QPen(color)
