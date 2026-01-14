@@ -1,0 +1,159 @@
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Rajdhani:wght@300;500;700&display=swap');
+
+:root {
+    --primary: #00ffff;
+    --primary-dim: rgba(0, 255, 255, 0.2);
+    --secondary: #0088ff;
+    --alert: #ff0055;
+    --bg: #020202;
+    --surface: #0a0a0a;
+    --grid: rgba(0, 255, 255, 0.05);
+}
+
+body {
+    background-color: var(--bg);
+    background-image: 
+        linear-gradient(var(--grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 40px 40px;
+    color: var(--primary);
+    font-family: 'Rajdhani', sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    margin: 0;
+    overflow: hidden;
+}
+
+/* --- HUD Container --- */
+.hud-container {
+    position: relative;
+    width: 800px;
+    height: 600px;
+    border: 1px solid var(--primary-dim);
+    background: rgba(10, 10, 10, 0.8);
+    box-shadow: 0 0 20px rgba(0, 255, 255, 0.1);
+    border-radius: 10px;
+    backdrop-filter: blur(5px);
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+}
+
+/* --- Visualizer --- */
+#visualizer-container {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 300px;
+    height: 300px;
+    border-radius: 50%;
+    border: 1px solid var(--primary-dim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 50px var(--primary-dim);
+    z-index: 0;
+}
+
+canvas#audio-vis {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    opacity: 0.8;
+}
+
+/* --- Text Output --- */
+#output-area {
+    z-index: 10;
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    margin-bottom: 50px;
+    text-shadow: 0 0 5px var(--primary);
+}
+
+.message {
+    margin: 5px 0;
+    padding: 10px;
+    border-left: 2px solid transparent;
+    animation: fadeIn 0.3s ease-in;
+}
+
+.message.user {
+    text-align: right;
+    color: #fff;
+    border-right: 2px solid #fff;
+    border-left: none;
+    opacity: 0.8;
+}
+
+.message.cherry {
+    text-align: left;
+    color: var(--primary);
+    border-left: 2px solid var(--primary);
+    font-size: 1.2em;
+    font-weight: 500;
+}
+
+/* --- Status Bar --- */
+#status-bar {
+    border-top: 1px solid var(--primary-dim);
+    padding-top: 10px;
+    display: flex;
+    justify-content: space-between;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.8em;
+    color: var(--secondary);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+}
+
+.blink {
+    animation: blinker 1.5s linear infinite;
+}
+
+@keyframes blinker {
+    50% { opacity: 0; }
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* --- Microphone Trigger --- */
+#mic-trigger {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: transparent;
+    border: 2px solid var(--primary);
+    color: var(--primary);
+    font-size: 24px;
+    cursor: pointer;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s;
+}
+
+#mic-trigger:hover {
+    box-shadow: 0 0 20px var(--primary);
+    background: var(--primary-dim);
+}
+
+#mic-trigger.active {
+    background: var(--primary);
+    color: var(--bg);
+    box-shadow: 0 0 40px var(--primary);
+}

@@ -1,0 +1,13 @@
+{
+    "name": "User",
+    "preferences": {
+        "verbosity": "concise",
+        "tone": "professional",
+        "tech_level": "expert"
+    },
+    "traits": [
+        "Prefers direct answers",
+        "Likes code snippets",
+        "Dislikes small talk"
+    ]
+}

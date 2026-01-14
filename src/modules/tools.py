@@ -60,38 +60,56 @@ def deep_research(query: str) -> str:
         return f"Deep Research Error: {str(e)}"
 
 @tool
-def open_application(app_name: str) -> str:
+def open_application(target: str) -> str:
     """
-    Finds and opens a desktop application on the user's Windows PC.
-    Use this when the user says "Open Chrome", "Start Spotify", etc.
+    Finds and opens a desktop application or file on the user's PC.
+    Target can be an app name (e.g., 'chrome', 'notepad') or a file path.
     """
-    app_name = app_name.lower()
-    common_apps = {
-        "chrome": r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        "brave": r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
-        "spotify": r"C:\Users\{user}\AppData\Roaming\Spotify\Spotify.exe",
-        "discord": r"C:\Users\{user}\AppData\Local\Discord\Update.exe --processStart Discord.exe",
-        "code": "code",
-        "notepad": "notepad.exe",
-        "calculator": "calc.exe"
-    }
+    import os
+    import platform
+    import subprocess
     
-    # Try common apps first
-    user = os.getlogin()
-    if app_name in common_apps:
-        path = common_apps[app_name].replace("{user}", user)
+    try:
+        if platform.system() == "Windows":
+            # os.startfile is "magic" on Windows - it opens apps, files, folders, URLs
+            os.startfile(target)
+            return f"Opening '{target}' via system start..."
+        elif platform.system() == "Darwin": # Mac
+            subprocess.call(["open", target])
+            return f"Opening '{target}' via Mac open..."
+        else: # Linux
+            subprocess.call(["xdg-open", target])
+            return f"Opening '{target}' via xdg-open..."
+    except Exception as e:
+        # Fallback for app names that aren't paths
         try:
-            subprocess.Popen(path, shell=True)
-            return f"Opening {app_name}..."
+            if platform.system() == "Windows":
+                subprocess.Popen(f"start {target}", shell=True)
+                return f"Invoked 'start' for '{target}'."
         except:
             pass
-            
-    # Fallback: Use 'start' command which is smarter
+        return f"Error opening '{target}': {str(e)}"
+
+@tool
+def read_local_file(file_path: str) -> str:
+    """Reads the content of a local file."""
     try:
-        subprocess.run(f"start {app_name}", shell=True, check=True)
-        return f"Invoked 'start' command for {app_name}."
-    except:
-        return f"Failed to open {app_name}. Please check if it's installed or in your PATH."
+        with open(file_path, 'r', encoding='utf-8') as f: 
+            return f.read()
+    except Exception as e: 
+        return f"Error reading file: {str(e)}"
+
+@tool
+def write_local_file(file_path: str, content: str) -> str:
+    """Creates or updates a local file with the provided content."""
+    try:
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        return f"Successfully wrote content to '{file_path}'."
+    except Exception as e:
+        return f"Error writing file: {str(e)}"
 
 @tool
 def system_control(action: str, value: str = "") -> str:
@@ -218,6 +236,6 @@ CHERRY_TOOLS = [
     search_web, deep_research, open_application, system_control,
     set_background_goal, check_background_tasks,
     get_active_window_context, control_pc_ui, get_current_time, 
-    read_local_file, execute_system_command, save_memory, recall_memory, 
-    see_screen, scrape_website
+    read_local_file, write_local_file, execute_system_command, 
+    save_memory, recall_memory, see_screen, scrape_website
 ]

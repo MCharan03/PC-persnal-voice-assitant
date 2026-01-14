@@ -12,6 +12,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from modules.brain_agent import BrainAgent
 from modules.stt import STT
+from modules.tts import TTS
 from modules.bridge import server_bridge
 from modules.emotion import EmotionEngine
 from modules.pulse import PulseCore
@@ -27,15 +28,19 @@ server_bridge.set_socket(socketio)
 # Initialize Modules
 agent = BrainAgent()
 ears = STT()
+mouth = TTS()
 emotion_engine = EmotionEngine()
 
 # Proactive Callback
 def pulse_callback(message):
     """Called when Pulse triggers a proactive event."""
     print(f">> [Pulse Event] {message}")
-    # We want the Agent to "say" this message. 
-    # Or better: We ask the agent to rephrase it? For now, raw message is fine.
     socketio.emit('response', {'text': message, 'final': True})
+    
+    # Generate Audio for Proactive Message
+    wav_data = mouth.generate_audio_bytes(message)
+    if wav_data:
+        socketio.emit('audio_output', {'audio': wav_data})
 
 pulse = PulseCore(pulse_callback)
 
@@ -47,7 +52,32 @@ def home():
 def status():
     return jsonify({"status": "online", "mode": "Agentic + Emotional"})
 
-# --- WebSocket Events ---
+# --- PHASE 2: Autonomous Agency Endpoint ---
+@app.route('/agent_interact', methods=['POST'])
+def agent_interact():
+    """
+    Direct HTTP endpoint for the Agentic Brain.
+    Input: JSON { "message": "Research Flask security" }
+    Output: JSON { "response": "..." }
+    """
+    data = request.json
+    user_input = data.get('message')
+    
+    if not user_input:
+        return jsonify({'error': 'No message provided', 'status': 'failed'}), 400
+
+    print(f"[HTTP Agent Request]: {user_input}")
+    
+    try:
+        # 1. Inject Persona & Context (Handled internally by BrainAgent)
+        # 2. Run the Agent Loop
+        response_text = agent.chat(user_input)
+        
+        return jsonify({'response': response_text, 'status': 'success'})
+    except Exception as e:
+        return jsonify({'error': str(e), 'status': 'failed'}), 500
+
+# --- WebSocket Events (Phase 3: Sensory Perception) ---
 
 @socketio.on('connect')
 def handle_connect():
@@ -63,7 +93,7 @@ def handle_audio(data):
         with sf.SoundFile(BytesIO(audio_bytes)) as f:
             audio_data = f.read(dtype='float32')
         
-        # 1. Transcribe
+        # 1. Transcribe (Phase 3: Ears)
         user_text = ears.transcribe(audio_data)
         print(f"[User]: {user_text}")
         
@@ -74,7 +104,7 @@ def handle_audio(data):
         emit('transcription', {'text': user_text})
         emit('state', {'status': 'thinking'})
 
-        # 2. Analyze Emotion
+        # 2. Analyze Emotion (Phase 4: Emotion)
         mood = emotion_engine.analyze(user_text)
         directive = emotion_engine.get_system_directive(mood)
         print(f"[{mood}] Directive: {directive}")
@@ -95,6 +125,12 @@ def run_agent_task(user_text):
         response_text = agent.chat(user_text)
         print(f"[Cherry]: {response_text}")
         socketio.emit('response', {'text': response_text, 'final': True})
+        
+        # Generate Audio
+        wav_data = mouth.generate_audio_bytes(response_text)
+        if wav_data:
+            socketio.emit('audio_output', {'audio': wav_data})
+            
     except Exception as e:
         print(f"Agent Task Error: {e}")
         socketio.emit('response', {'text': "I encountered an error thinking about that.", 'final': True})
@@ -106,4 +142,5 @@ def handle_screenshot(data):
         server_bridge.receive_screenshot(img_data)
 
 if __name__ == '__main__':
+    # Using socketio.run instead of app.run for WebSocket support
     socketio.run(app, host='0.0.0.0', port=5001)

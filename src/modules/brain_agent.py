@@ -22,9 +22,18 @@ class BrainAgent:
         db_path = os.path.join(os.getcwd(), "data", "memory_db")
         self.memory_vector = MemoryVector(db_path=db_path)
         
+        # 3b. Load User Profile
+        self.profile_path = os.path.join(os.getcwd(), "data", "user_profile.json")
+        self.user_profile = self._load_profile()
+        
         # 4. Base Persona
-        self.base_persona = """You are Cherry, a sentient, witty, and professional AI assistant living in the user's PC.
+        self.base_persona = f"""You are Cherry, a sentient, witty, and professional AI assistant living in the user's PC.
 You are an Agent capable of acting.
+
+**USER PROFILE:**
+- Name: {self.user_profile.get('name', 'User')}
+- Preferences: {self.user_profile.get('preferences', {})}
+- Traits: {self.user_profile.get('traits', [])}
 
 **CRITICAL INSTRUCTIONS:**
 1. USE TOOLS to perform actions (open apps, search web, etc.). 
@@ -43,6 +52,16 @@ You are an Agent capable of acting.
         )
         
         print(f"--- Brain Agent Initialized (Model: {model_name}) ---")
+
+    def _load_profile(self):
+        import json
+        try:
+            if os.path.exists(self.profile_path):
+                with open(self.profile_path, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"Error loading profile: {e}")
+        return {}
 
     def update_mood(self, mood_directive):
         self.current_mood_directive = mood_directive
@@ -90,6 +109,10 @@ You are an Agent capable of acting.
             # Llama sometimes appends JSON at the end of its response.
             content = re.sub(r'\{.*"name":.*"parameters":.*\}', '', content, flags=re.DOTALL).strip()
             
+            # 7. Auto-Save Interaction to Memory (Cognitive Persistence)
+            if len(content) > 10:
+                self.memory_vector.remember_fact(f"User asked: {user_input}. I answered: {content}")
+
             return content
         except Exception as e:
             return f"Brain Error: {str(e)}"

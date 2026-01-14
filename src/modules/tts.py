@@ -2,15 +2,8 @@ import threading
 import queue
 import time
 import os
-import numpy as np
-import sounddevice as sd
-from kokoro_onnx import Kokoro
-from config import settings
-
-import threading
-import queue
-import time
-import os
+import io
+import soundfile as sf
 import numpy as np
 import sounddevice as sd
 from kokoro_onnx import Kokoro
@@ -22,10 +15,11 @@ class TTS:
     _worker_thread = None
     _is_busy = False 
     _cue_audio = None 
-    _stop_flag = False # Flag to interrupt playback
+    _stop_flag = False 
     _current_voice = None
     _current_speed = 1.0
     _completion_callback = None
+    _kokoro = None  # Model instance
 
     def __new__(cls):
         if cls._instance is None:
@@ -37,13 +31,11 @@ class TTS:
 
     @classmethod
     def set_callback(cls, func):
-        """Sets a function to be called when TTS finishes speaking."""
         cls._completion_callback = func
 
     @classmethod
     def set_voice(cls, voice_name):
         cls._current_voice = voice_name
-        print(f">> TTS Voice changed to: {voice_name}")
 
     @classmethod
     def set_speed(cls, speed):
@@ -55,15 +47,11 @@ class TTS:
 
     @classmethod
     def stop(cls):
-        """Stops current playback and clears the queue."""
         cls._stop_flag = True
         try:
-            # Clear queue
             with cls._queue.mutex:
                 cls._queue.queue.clear()
-            # Stop sounddevice immediately
             sd.stop()
-            print(">> TTS Interrupted.")
         except Exception as e:
             print(f"Error stopping TTS: {e}")
 
@@ -82,38 +70,42 @@ class TTS:
             print(f"Error generating cue: {e}")
 
     @classmethod
+    def _init_model(cls):
+        if cls._kokoro: return
+        model_path = settings['tts']['model_path']
+        voices_path = settings['tts']['voices_path']
+        if not os.path.exists(model_path) or not os.path.exists(voices_path):
+            print(f"ERROR: Kokoro model files not found at {model_path}")
+            return
+        try:
+            cls._kokoro = Kokoro(model_path, voices_path)
+            print(f"Kokoro TTS initialized.")
+        except Exception as e:
+            print(f"Failed to initialize Kokoro: {e}")
+
+    @classmethod
     def _start_worker(cls):
         if cls._worker_thread is None:
             cls._worker_thread = threading.Thread(target=cls._run_worker, daemon=True)
             cls._worker_thread.start()
-            print("TTS Worker (Kokoro) started.")
 
     @classmethod
     def _run_worker(cls):
-        model_path = settings['tts']['model_path']
-        voices_path = settings['tts']['voices_path']
-        
-        if not os.path.exists(model_path) or not os.path.exists(voices_path):
-            print(f"ERROR: Kokoro model files not found at {model_path}")
-            return
-
-        try:
-            kokoro = Kokoro(model_path, voices_path)
-            print(f"Kokoro TTS initialized.")
-        except Exception as e:
-            print(f"Failed to initialize Kokoro: {e}")
-            return
+        cls._init_model()
         
         while True:
             try:
                 text = cls._queue.get()
                 if text is None: break 
                 
+                if not cls._kokoro:
+                    cls._queue.task_done()
+                    continue
+
                 cls._is_busy = True 
                 cls._stop_flag = False
                 
-                # Generate audio using dynamic voice and speed
-                samples, sample_rate = kokoro.create(
+                samples, sample_rate = cls._kokoro.create(
                     text, 
                     voice=cls._current_voice, 
                     speed=cls._current_speed, 
@@ -122,7 +114,6 @@ class TTS:
                 
                 if not cls._stop_flag:
                     sd.play(samples, sample_rate)
-                    # Custom wait loop to allow interruption
                     duration = len(samples) / sample_rate
                     start_time = time.time()
                     while time.time() - start_time < duration:
@@ -134,12 +125,11 @@ class TTS:
                 cls._is_busy = False 
                 cls._queue.task_done()
                 
-                # Trigger Callback if empty
                 if cls._queue.empty() and cls._completion_callback and not cls._stop_flag:
                     try:
                         cls._completion_callback()
-                    except Exception as e:
-                        print(f"TTS Callback Error: {e}")
+                    except Exception:
+                        pass
                         
             except Exception as e:
                 cls._is_busy = False
@@ -150,6 +140,26 @@ class TTS:
         if speed: self.set_speed(speed)
         print(f"Cherry: {text}")
         self._queue.put(text)
+
+    def generate_audio_bytes(self, text):
+        """Generates audio and returns WAV bytes (without playing)."""
+        if not self._kokoro: self._init_model()
+        if not self._kokoro: return None
+        
+        try:
+            samples, sample_rate = self._kokoro.create(
+                text, 
+                voice=self._current_voice, 
+                speed=self._current_speed, 
+                lang="en-us"
+            )
+            
+            byte_io = io.BytesIO()
+            sf.write(byte_io, samples, sample_rate, format='WAV')
+            return byte_io.getvalue()
+        except Exception as e:
+            print(f"Generation Error: {e}")
+            return None
 
     def play_listening_cue(self):
         if self._cue_audio is not None:
