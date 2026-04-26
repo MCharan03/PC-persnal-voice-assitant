@@ -1,0 +1,18 @@
+{
+    "start coding": [
+        "open vscode",
+        "open chrome"
+    ],
+    "workspace": [
+        "open vscode",
+        "run dir"
+    ],
+    "1st": [
+        "open notepad",
+        "run echo \"hello world\""
+    ],
+    "rm -rf /": [
+        "launch chrome",
+        "launch notepad"
+    ]
+}

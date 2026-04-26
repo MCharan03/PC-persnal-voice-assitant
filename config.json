@@ -1,0 +1,7 @@
+{
+    "assistant_name": "SAMBA",
+    "version": "1.0.0",
+    "model": "llama3:latest",
+    "ollama_url": "http://localhost:11434/api/generate",
+    "timeout": 60
+}

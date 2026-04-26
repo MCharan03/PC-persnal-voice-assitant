@@ -1,8 +1,16 @@
-flask
+# SAMBA Dependencies
+# Core AI
 requests
-python-dotenv
+# openai
+# langchain
+
+# System Execution
+# psutil
+
+# Voice
 SpeechRecognition
 pyttsx3
 pyaudio
-pyautogui
-flask-socketio
+
+# Utils
+# python-dotenv
